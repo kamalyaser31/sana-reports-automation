@@ -96,6 +96,17 @@ const CONFIG = {
     'ملاحظات الإدارة',
   ],
 
+  // Telegram Bot Notification Configuration
+  TELEGRAM: {
+    ENABLED: true,
+    get BOT_TOKEN() {
+      return PropertiesService.getScriptProperties().getProperty('TELEGRAM_BOT_TOKEN') || '8865369925:AAGuMdA4TjKu-D8mU1heLVDqQwn2nOygQFg';
+    },
+    get CHAT_ID() {
+      return PropertiesService.getScriptProperties().getProperty('TELEGRAM_CHAT_ID') || '852436515';
+    },
+  },
+
   // Fallback Values for Missing Data Preservation
   FALLBACKS: {
     TEACHER_NAME: 'معلم غير محدد',
@@ -113,8 +124,28 @@ const CONFIG = {
 };
 
 // ============================================================================
-// 2. MAIN TRIGGER ENTRY POINT
+// 2. MAIN TRIGGER & AUTHORIZATION ENTRY POINTS
 // ============================================================================
+
+/**
+ * Authorization & Self-Test function.
+ * Run this function once from the Apps Script editor toolbar to grant permissions.
+ */
+function authorizeAndTest() {
+  console.log('Running authorization and self-test...');
+  const mockEvent = {
+    mockData: {
+      'اسم المعلم': 'محمد نبيل',
+      'فئة الطلاب': 'كبار',
+      'الساعات': '1',
+      'الدقائق': '30',
+      'التقرير': '═══ [ تقرير أكاديمية سنا ] ═══\nالتاريخ: 26-08-2026\nالفترة: تجويد\nعدد الطلاب: 6\n━━━━━━━━━━━━━━━\nتقرير تجريبي لتفويض الصلاحيات وإنشاء الجداول.',
+      'ملاحظات خاصة للإدارة': 'تفويض صلاحيات Google Sheets.',
+    },
+  };
+  onFormSubmit(mockEvent);
+  console.log('Authorization and self-test completed successfully!');
+}
 
 /**
  * Handles Form Submit event from Google Forms installable trigger.
@@ -210,6 +241,13 @@ function executeSubmissionPipeline(e, executionId, startTime) {
       error: `Google Sheets Warning: ${sheetError.message}`,
       stack: sheetError.stack || 'No stack trace',
     });
+  }
+
+  // Step 8: Send Telegram Admin Notification (Non-blocking)
+  try {
+    sendTelegramNotification(validatedData);
+  } catch (telegramError) {
+    console.warn(`[TELEGRAM NOTIFICATION WARNING] [ExecutionID: ${executionId}]`, telegramError.message);
   }
 
   console.log(`[PIPELINE SUCCESS] [ExecutionID: ${executionId}] Saved: ${savedFile.getName()} in ${driveTarget.monthFolder.getName()}`);
@@ -871,3 +909,75 @@ function sanitizeFilename(str) {
     .replace(/[\r\n]+/g, ' ')
     .trim();
 }
+
+// ============================================================================
+// 11. TELEGRAM NOTIFICATIONS
+// ============================================================================
+
+/**
+ * Sends a structured notification card to Telegram admin channel/chat via Telegram Bot API.
+ * @param {Object} data - Validated submission data.
+ */
+function sendTelegramNotification(data) {
+  if (!CONFIG.TELEGRAM.ENABLED) return;
+
+  const botToken = CONFIG.TELEGRAM.BOT_TOKEN;
+  const chatId = CONFIG.TELEGRAM.CHAT_ID;
+
+  if (!botToken || !chatId) {
+    console.warn('[TELEGRAM WARNING] Bot token or Chat ID is missing. Notification skipped.');
+    return;
+  }
+
+  const messageLines = [
+    '📖 <b>تقرير حلقة جديد — أكاديمية سنا</b>',
+    '',
+    `• <b>المعلم:</b> ${escapeHtml(data.teacherName)} (<code>${escapeHtml(data.teacherId)}</code>)`,
+    `• <b>نوع الحلقة / الفترة:</b> ${escapeHtml(data.sessionType)} (<code>${escapeHtml(data.sessionId)}</code>)`,
+    `• <b>فئة الطلاب:</b> ${escapeHtml(data.studentCategory)}`,
+    `• <b>تاريخ التقرير:</b> ${escapeHtml(data.reportDateText || data.submissionDateFormatted)}`,
+    `• <b>مدة الحصة:</b> ${escapeHtml(data.durationFormatted)} (<code>${escapeHtml(data.durationTime)}</code>)`,
+    `• <b>عدد الطلاب:</b> ${data.studentCount !== null ? data.studentCount : 'غير محدد'}`,
+    `• <b>حالة التقرير:</b> ${data.isDuplicate ? 'تقرير مكرر' : 'تقرير أصيل'}`,
+    '',
+    '📝 <b>ملاحظات الإدارة:</b>',
+    escapeHtml(data.adminNotes || 'لا توجد ملاحظات إدارية.'),
+  ];
+
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  const payload = {
+    chat_id: chatId,
+    text: messageLines.join('\n'),
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+  };
+
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  };
+
+  const response = UrlFetchApp.fetch(url, options);
+  const resCode = response.getResponseCode();
+  if (resCode !== 200) {
+    console.warn(`[TELEGRAM ERROR] API returned status ${resCode}: ${response.getContentText()}`);
+  } else {
+    console.log('[TELEGRAM SUCCESS] Notification delivered successfully.');
+  }
+}
+
+/**
+ * Escapes HTML special characters for Telegram HTML parse mode.
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
