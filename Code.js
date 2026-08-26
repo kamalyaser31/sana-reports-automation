@@ -933,18 +933,10 @@ function sendTelegramNotification(data) {
   const messageLines = [
     '📖 <b>تقرير حلقة جديد — أكاديمية سنا</b>',
     '',
-    `• <b>المعلم:</b> ${escapeHtml(data.teacherName)} (<code>${escapeHtml(data.teacherId)}</code>)`,
-    `• <b>نوع الحلقة / الفترة:</b> ${escapeHtml(data.sessionType)} (<code>${escapeHtml(data.sessionId)}</code>)`,
-    `• <b>فئة الطلاب:</b> ${escapeHtml(data.studentCategory)}`,
+    `• <b>المعلم:</b> ${escapeHtml(data.teacherName)}`,
     `• <b>تاريخ التقرير:</b> ${escapeHtml(data.reportDateText || data.submissionDateFormatted)}`,
     `• <b>مدة الحصة:</b> ${escapeHtml(data.durationFormatted)} (<code>${escapeHtml(data.durationTime)}</code>)`,
-    `• <b>عدد الطلاب:</b> ${data.studentCount !== null ? data.studentCount : 'غير محدد'}`,
-    `• <b>حالة التقرير:</b> ${data.isDuplicate ? 'تقرير مكرر' : 'تقرير أصيل'}`,
-    '',
-    '📝 <b>ملاحظات الإدارة:</b>',
-    escapeHtml(data.adminNotes || 'لا توجد ملاحظات إدارية.'),
-    '',
-    `🔗 <b>رابط التقرير:</b> <a href="${data.fileUrl || '#'}">فتح الملف في Google Drive</a>`,
+    `• <b>رابط التقرير:</b> <a href="${data.fileUrl || '#'}">فتح الملف في Google Drive</a>`,
   ];
 
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
