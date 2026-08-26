@@ -103,7 +103,7 @@ const CONFIG = {
       return PropertiesService.getScriptProperties().getProperty('TELEGRAM_BOT_TOKEN') || '8865369925:AAGuMdA4TjKu-D8mU1heLVDqQwn2nOygQFg';
     },
     get CHAT_ID() {
-      return PropertiesService.getScriptProperties().getProperty('TELEGRAM_CHAT_ID') || '852436515';
+      return PropertiesService.getScriptProperties().getProperty('TELEGRAM_CHAT_ID') || '-5179038072';
     },
   },
 
