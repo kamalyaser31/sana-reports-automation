@@ -1221,17 +1221,19 @@ function exportSingleSheetToPdf(spreadsheet, sheet, targetFolder, pdfFilename) {
 function doPost(e) {
   try {
     if (!e || !e.postData || !e.postData.contents) {
-      return HtmlService.createHtmlOutput('OK');
+      return ContentService.createTextOutput('OK').setMimeType(ContentService.MimeType.TEXT);
     }
 
     const update = JSON.parse(e.postData.contents);
     if (!update.message || !update.message.text) {
-      return HtmlService.createHtmlOutput('OK');
+      return ContentService.createTextOutput('OK').setMimeType(ContentService.MimeType.TEXT);
     }
 
     const chatId = update.message.chat.id;
     const text = update.message.text.trim();
     const command = text.split(/\s+/)[0].toLowerCase().split('@')[0];
+
+    console.log(`[TELEGRAM INCOMING] ChatID: ${chatId}, Command: ${command}, Text: ${text}`);
 
     switch (command) {
       case '/start':
@@ -1269,7 +1271,7 @@ function doPost(e) {
     console.error('[TELEGRAM WEBHOOK ERROR]', err.message, err.stack);
   }
 
-  return HtmlService.createHtmlOutput('OK');
+  return ContentService.createTextOutput('OK').setMimeType(ContentService.MimeType.TEXT);
 }
 
 /**
@@ -1289,12 +1291,13 @@ function sendTelegramReply(chatId, text) {
     disable_web_page_preview: true,
   };
 
-  UrlFetchApp.fetch(url, {
+  const res = UrlFetchApp.fetch(url, {
     method: 'post',
     contentType: 'application/json',
     payload: JSON.stringify(payload),
     muteHttpExceptions: true,
   });
+  console.log(`[TELEGRAM REPLY LOG] Sent to ${chatId}, Status: ${res.getResponseCode()}`);
 }
 
 /**
