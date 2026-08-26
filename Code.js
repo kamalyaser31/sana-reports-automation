@@ -1,11 +1,17 @@
 /**
  * ============================================================================
- * Sana Academy Reports Automation (Version 3 - Final Release)
+ * Sana Academy Reports Automation (Version 4 - Enhanced Hybrid Release)
  * ============================================================================
- * Automates receiving Google Form/Sheets submissions for Sana Academy reports,
- * validates data (saving reports even with missing fields), and stores structured
- * UTF-8 Markdown files in Google Drive under: Root / Year / Teacher / Month.
- * Logs failures to monthly automation_errors_YYYY_MM.log files in the Root folder.
+ * Automates receiving Google Form responses for Sana Academy reports:
+ * 1. Parses structured metadata (Date, Session/Period, Student Count) directly
+ *    from the report body text.
+ * 2. Reads Teacher, Student Category, Hours, Minutes, and Admin Notes from Form.
+ * 3. Builds and stores structured UTF-8 Markdown files in Google Drive:
+ *    Root / Year / Teacher / Month / DD-MM-YYYY_SessionType_TeacherName.md
+ * 4. Creates/Updates a dedicated yearly Google Sheet per teacher in their year folder:
+ *    "Teacher Name - تقارير الحلقات Year" with monthly tabs (08 - أغسطس),
+ *    RTL direction, styled headers, standard duration (HH:MM), and clean data.
+ * 5. Isolates failures, preserves data non-destructively, and logs errors monthly.
  * ============================================================================
  */
 
@@ -14,20 +20,18 @@
 // ============================================================================
 const CONFIG = {
   // Required: Target Google Drive Root Folder ID.
-  // Read fresh on every access so runtime changes to Script Properties take effect immediately.
   get ROOT_FOLDER_ID() {
     return PropertiesService.getScriptProperties().getProperty('ROOT_FOLDER_ID') || '';
   },
 
-  // Fallback Root Folder Name for log references
+  // Fallback Root Folder Name for Drive search and creation
   ROOT_FOLDER_NAME: 'تقرير حلقات أكاديمية سنا',
 
   // Error Log File Name prefix inside Root Folder.
-  // Actual filename is monthly: automation_errors_YYYY_MM.log (managed by getMonthlyErrorLogFilename)
+  // Actual filename is monthly: automation_errors_YYYY_MM.log
   ERROR_LOG_FILENAME_PREFIX: 'automation_errors',
 
   // Alert Email Address for Fatal Failures.
-  // Read fresh on every access so runtime changes to Script Properties take effect immediately.
   get ALERT_EMAIL() {
     return PropertiesService.getScriptProperties().getProperty('ALERT_EMAIL') || 'kamalyaser31@gmail.com';
   },
@@ -42,18 +46,13 @@ const CONFIG = {
     BACKOFF_MULTIPLIER: 2,
   },
 
-  // Internal Teacher Mappings.
-  // MAINTENANCE: Keys must match the Google Form dropdown values EXACTLY (copy-paste to avoid typos).
-  // When a teacher's display name changes in the Form, add the new name here with the SAME id.
-  // Never reuse or change an existing id — downstream AI processing depends on id stability.
+  // Known Teacher Mappings.
   TEACHERS: {
     'محمد نبيل': { id: 'T001', name: 'محمد نبيل' },
     'أسماء علي': { id: 'T002', name: 'أسماء علي' },
   },
 
   // Internal Session Mappings.
-  // MAINTENANCE: Keys must match the Google Form dropdown values EXACTLY.
-  // Add new session types here with a new unique id; never reuse or remove existing ids.
   SESSIONS: {
     'صباحية': { id: 'MORNING', name: 'صباحية' },
     'مسائية': { id: 'EVENING', name: 'مسائية' },
@@ -77,17 +76,25 @@ const CONFIG = {
     '12 - ديسمبر',
   ],
 
-  // Google Form / Sheets Exact Field Names
+  // Google Form Fields
   FIELDS: {
     TEACHER: 'اسم المعلم',
-    SESSION_TYPE: 'نوع الحلقة',
     STUDENT_CATEGORY: 'فئة الطلاب',
-    REPORT_DATE: 'تاريخ التقرير',
-    DURATION: 'مدة الحصة',
-    STUDENT_COUNT: 'عدد الطلاب',
+    HOURS: 'الساعات',
+    MINUTES: 'الدقائق',
     REPORT_TEXT: 'التقرير',
     ADMIN_NOTES: 'ملاحظات خاصة للإدارة',
   },
+
+  // Google Sheets Headers for Monthly Tabs
+  SHEET_HEADERS: [
+    'تاريخ التقرير',
+    'نوع الحلقة / الفترة',
+    'فئة الطلاب',
+    'مدة الحصة',
+    'عدد الطلاب',
+    'ملاحظات الإدارة',
+  ],
 
   // Fallback Values for Missing Data Preservation
   FALLBACKS: {
@@ -96,710 +103,771 @@ const CONFIG = {
     SESSION_TYPE: 'حلقة غير محددة',
     SESSION_ID: 'SESSION_UNKNOWN',
     STUDENT_CATEGORY: 'غير محدد',
-    DURATION: 'غير محدد',
+    DURATION_TIME: '00:00',
+    DURATION_FORMATTED: 'غير محدد',
     STUDENT_COUNT: 0,
-    REPORT_TEXT: 'لم يُكتب تقرير في هذا الحقل.',
-    ADMIN_NOTES: 'لا توجد ملاحظات خاصة للإدارة.',
+    REPORT_TEXT: 'لا يوجد نص للتقرير.',
+    ADMIN_NOTES: 'لا توجد ملاحظات إدارية.',
+    DATE_TEXT: 'تاريخ غير محدد',
   },
 };
 
 // ============================================================================
-// 2. TRIGGER HANDLER & PIPELINE
+// 2. MAIN TRIGGER ENTRY POINT
 // ============================================================================
 
 /**
- * Main entry point for the installable Spreadsheet/Form submit trigger.
- * @param {Object} e - Trigger event object.
+ * Handles Form Submit event from Google Forms installable trigger.
+ * @param {Object} e - Event object from Google Forms submission.
  */
 function onFormSubmit(e) {
   const executionId = Utilities.getUuid();
+  const startTime = new Date();
+
   const lock = LockService.getScriptLock();
+  let hasLock = false;
 
   try {
-    const hasLock = lock.tryLock(CONFIG.LOCK_TIMEOUT_MS);
+    hasLock = lock.tryLock(CONFIG.LOCK_TIMEOUT_MS);
     if (!hasLock) {
-      throw new Error('Lock acquisition timeout: another execution is currently processing.');
+      throw new Error(`Could not obtain script lock within ${CONFIG.LOCK_TIMEOUT_MS}ms. Submission queued or throttled.`);
     }
 
     withRetry(() => {
-      executeSubmissionPipeline(e, executionId);
-    }, CONFIG.RETRY.MAX_ATTEMPTS, executionId);
+      executeSubmissionPipeline(e, executionId, startTime);
+    }, CONFIG.RETRY.MAX_ATTEMPTS, CONFIG.RETRY.INITIAL_DELAY_MS, CONFIG.RETRY.BACKOFF_MULTIPLIER);
 
   } catch (error) {
-    handleFatalError(error, executionId);
-  } finally {
+    const errorDetails = {
+      executionId: executionId,
+      timestamp: startTime.toISOString(),
+      error: error.message,
+      stack: error.stack || 'No stack trace available',
+    };
+
+    console.error(`[FATAL ERROR] [ExecutionID: ${executionId}]`, error.message, error.stack);
+
     try {
-      lock.releaseLock();
-    } catch (_) {
-      // Ignore errors when releasing lock
+      appendErrorToDriveLog(errorDetails);
+    } catch (logError) {
+      console.error('[LOGGER FAILURE] Failed to write to Drive monthly log:', logError.message);
+    }
+
+    try {
+      sendEmailAlert(errorDetails);
+    } catch (emailError) {
+      console.error('[ALERT FAILURE] Failed to send email alert:', emailError.message);
+    }
+
+  } finally {
+    if (hasLock) {
+      try {
+        lock.releaseLock();
+      } catch (releaseError) {
+        console.warn('[LOCK WARNING] Failed to release lock cleanly:', releaseError.message);
+      }
     }
   }
 }
 
+// ============================================================================
+// 3. PIPELINE EXECUTION ENGINE
+// ============================================================================
+
 /**
- * Sequential processing pipeline.
- * Flow: Extraction -> Validation -> Folder Resolution -> Duplicate Check -> Markdown -> Creation -> Verification.
- * @param {Object} e - Event object.
- * @param {string} executionId - Execution UUID.
+ * Executes the full processing pipeline for a single submission.
+ * @param {Object} e - Form submit event object.
+ * @param {string} executionId - Unique UUID for this run.
+ * @param {Date} startTime - Execution start timestamp.
  */
-function executeSubmissionPipeline(e, executionId) {
-  // Step 1: Extract form response values
+function executeSubmissionPipeline(e, executionId, startTime) {
+  // Step 1: Extract Form Inputs and Body Metadata
   const rawData = extractFormData(e);
 
-  // Step 2: Validate fields (identifies missing fields without aborting)
-  const validatedData = validateFormData(rawData, executionId);
+  // Step 2: Validate and Sanitize Fields (Non-destructive)
+  const validatedData = validateFormData(rawData, executionId, startTime);
 
-  // Step 3: Resolve root and hierarchical Drive folders
-  const targetFolder = resolveTargetFolder(validatedData);
+  // Step 3: Resolve Storage Hierarchy in Google Drive (Root / Year / Teacher / Month)
+  const driveTarget = resolveTargetFolder(validatedData);
 
-  // Step 4: Resolve unique filename and check duplicate state
-  const fileResolution = resolveFileNameAndDuplicateState(targetFolder, validatedData);
+  // Step 4: Generate Markdown Content with YAML Frontmatter
+  const markdownContent = generateMarkdownContent(validatedData);
 
-  // Step 5: Generate sanitized Markdown content
-  const markdownContent = generateMarkdown(validatedData, fileResolution);
+  // Step 5: Save Markdown File with Duplicate Detection and Collision Handling
+  const savedFile = saveMarkdownFile(driveTarget.monthFolder, validatedData, markdownContent);
 
-  // Step 6: Create UTF-8 Markdown file in Google Drive
-  const createdFile = saveMarkdownFile(targetFolder, fileResolution.fileName, markdownContent);
+  // Step 6: Verify File Integrity in Drive
+  verifySavedFile(savedFile, markdownContent);
 
-  // Step 7: Verify created file integrity
-  verifyCreatedFile(createdFile, fileResolution.fileName);
+  // Step 7: Record Submission into Teacher's Yearly Google Sheet (Monthly Tab)
+  try {
+    recordToTeacherSheet(driveTarget.yearTeacherFolder, validatedData);
+  } catch (sheetError) {
+    console.error(`[SHEET RECORD WARNING] [ExecutionID: ${executionId}] Could not append to teacher sheet:`, sheetError.message);
+    appendErrorToDriveLog({
+      executionId: executionId,
+      timestamp: startTime.toISOString(),
+      error: `Google Sheets Warning: ${sheetError.message}`,
+      stack: sheetError.stack || 'No stack trace',
+    });
+  }
+
+  console.log(`[PIPELINE SUCCESS] [ExecutionID: ${executionId}] Saved: ${savedFile.getName()} in ${driveTarget.monthFolder.getName()}`);
 }
 
 // ============================================================================
-// 3. DATA EXTRACTION
+// 4. DATA EXTRACTION & METADATA PARSING
 // ============================================================================
 
 /**
- * Safely extracts field values from Spreadsheet-bound or Form-bound events.
+ * Extracts raw data from Form event and parses text metadata from the report body.
  * @param {Object} e - Event object.
- * @returns {Object} Extracted raw values.
+ * @returns {Object} Raw extracted form fields.
  */
 function extractFormData(e) {
   if (!e) {
     throw new Error('Missing event object (e is null or undefined).');
   }
 
-  const responses = {};
+  const values = {};
 
-  // Primary: Spreadsheet-bound trigger (e.namedValues)
-  if (e.namedValues) {
-    for (const key in e.namedValues) {
-      const cleanKey = key.trim();
-      const val = e.namedValues[key];
-      responses[cleanKey] = Array.isArray(val) ? val[0] : val;
+  // Form submit trigger provides e.namedValues or e.response (or e.mockData for tests)
+  if (e.mockData) {
+    for (const key in e.mockData) {
+      if (Object.prototype.hasOwnProperty.call(e.mockData, key)) {
+        values[key.trim()] = e.mockData[key];
+      }
     }
-  }
-  // Fallback: Form-bound trigger (e.response.getItemResponses)
-  else if (e.response && typeof e.response.getItemResponses === 'function') {
+  } else if (e.namedValues) {
+    for (const key in e.namedValues) {
+      if (Object.prototype.hasOwnProperty.call(e.namedValues, key)) {
+        const val = e.namedValues[key];
+        values[key.trim()] = Array.isArray(val) ? val[0] : val;
+      }
+    }
+  } else if (e.response && typeof e.response.getItemResponses === 'function') {
     const itemResponses = e.response.getItemResponses();
     for (let i = 0; i < itemResponses.length; i++) {
-      const title = itemResponses[i].getItem().getTitle().trim();
-      responses[title] = itemResponses[i].getResponse();
+      const itemResponse = itemResponses[i];
+      const itemTitle = itemResponse.getItem().getTitle().trim();
+      values[itemTitle] = itemResponse.getResponse();
     }
-  }
-  // Mock event support for test simulation
-  else if (e.mockData) {
-    Object.assign(responses, e.mockData);
   } else {
-    throw new Error('Unrecognized event structure: neither namedValues nor itemResponses found.');
+    throw new Error('Unrecognized event format: neither e.namedValues nor e.response is available.');
   }
 
+  const rawTeacherName = getFieldCaseInsensitive(values, CONFIG.FIELDS.TEACHER);
+  const rawStudentCategory = getFieldCaseInsensitive(values, CONFIG.FIELDS.STUDENT_CATEGORY);
+  const rawHours = getFieldCaseInsensitive(values, CONFIG.FIELDS.HOURS);
+  const rawMinutes = getFieldCaseInsensitive(values, CONFIG.FIELDS.MINUTES);
+  const rawReportText = getFieldCaseInsensitive(values, CONFIG.FIELDS.REPORT_TEXT);
+  const rawAdminNotes = getFieldCaseInsensitive(values, CONFIG.FIELDS.ADMIN_NOTES);
+
+  // Parse embedded metadata from the report body
+  const bodyMetadata = parseReportMetadata(rawReportText || '');
+
   return {
-    teacherName: getSafeString(responses[CONFIG.FIELDS.TEACHER]),
-    sessionType: getSafeString(responses[CONFIG.FIELDS.SESSION_TYPE]),
-    studentCategory: getSafeString(responses[CONFIG.FIELDS.STUDENT_CATEGORY]),
-    reportDateRaw: responses[CONFIG.FIELDS.REPORT_DATE],
-    duration: getSafeString(responses[CONFIG.FIELDS.DURATION]),
-    studentCountRaw: responses[CONFIG.FIELDS.STUDENT_COUNT],
-    reportText: getSafeString(responses[CONFIG.FIELDS.REPORT_TEXT]),
-    adminNotes: getSafeString(responses[CONFIG.FIELDS.ADMIN_NOTES]),
+    rawTeacherName,
+    rawStudentCategory,
+    rawHours,
+    rawMinutes,
+    rawReportText,
+    rawAdminNotes,
+    bodyMetadata,
+    submissionTimestamp: values['Timestamp'] || new Date().toISOString(),
   };
 }
 
+/**
+ * Extracts metadata lines (Date, Session/Period, Student Count) directly from report text.
+ * @param {string} text - Report body text.
+ * @returns {Object} Extracted metadata.
+ */
+function parseReportMetadata(text) {
+  if (!text || typeof text !== 'string') {
+    return { dateText: '', sessionTypeText: '', studentCountText: '' };
+  }
+
+  let dateText = '';
+  let sessionTypeText = '';
+  let studentCountText = '';
+
+  // Extract Date line: "التاريخ: ..."
+  const dateMatch = text.match(/التاريخ\s*:\s*([^\n\r]+)/);
+  if (dateMatch && dateMatch[1]) {
+    dateText = dateMatch[1].trim();
+  }
+
+  // Extract Period/Session line: "الفترة: ..." or "نوع الحلقة: ..."
+  const sessionMatch = text.match(/(?:الفترة|نوع الحلقة)\s*:\s*([^\n\r]+)/);
+  if (sessionMatch && sessionMatch[1]) {
+    sessionTypeText = sessionMatch[1].trim();
+  }
+
+  // Extract Student Count line: "عدد الطلاب: ..."
+  const studentCountMatch = text.match(/عدد الطلاب\s*:\s*([^\n\r]+)/);
+  if (studentCountMatch && studentCountMatch[1]) {
+    studentCountText = studentCountMatch[1].trim();
+  }
+
+  return {
+    dateText,
+    sessionTypeText,
+    studentCountText,
+  };
+}
+
+/**
+ * Searches for a field value by key name case-insensitively.
+ * @param {Object} obj - Named values object.
+ * @param {string} targetKey - Target field name.
+ * @returns {string|null} Field value or null.
+ */
+function getFieldCaseInsensitive(obj, targetKey) {
+  if (!obj || !targetKey) return null;
+  const cleanTarget = targetKey.trim().toLowerCase();
+  for (const k in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, k)) {
+      if (k.trim().toLowerCase() === cleanTarget) {
+        return String(obj[k]).trim();
+      }
+    }
+  }
+  return null;
+}
+
 // ============================================================================
-// 4. DATA VALIDATION (NON-DESTRUCTIVE)
+// 5. VALIDATION & SANITIZATION (NON-DESTRUCTIVE)
 // ============================================================================
 
 /**
- * Validates fields and assigns fallbacks for missing data instead of throwing errors.
- * Preserves every submission while recording missing field details.
- * @param {Object} data - Raw extracted values.
- * @param {string} executionId - Execution UUID.
- * @returns {Object} Structured data with validation status.
+ * Validates extracted fields and applies safe fallbacks without discarding submissions.
+ * @param {Object} raw - Raw extracted fields.
+ * @param {string} executionId - UUID.
+ * @param {Date} startTime - Start time.
+ * @returns {Object} Clean validated data structure.
  */
-function validateFormData(data, executionId) {
+function validateFormData(raw, executionId, startTime) {
   const missingFields = [];
   const validationErrors = [];
 
-  // Teacher validation & fallback
+  // 1. Teacher Validation & Dynamic ID resolution
   let teacherName = CONFIG.FALLBACKS.TEACHER_NAME;
   let teacherId = CONFIG.FALLBACKS.TEACHER_ID;
-  if (!data.teacherName) {
-    missingFields.push(CONFIG.FIELDS.TEACHER);
-  } else if (CONFIG.TEACHERS[data.teacherName]) {
-    teacherName = CONFIG.TEACHERS[data.teacherName].name;
-    teacherId = CONFIG.TEACHERS[data.teacherName].id;
+
+  if (raw.rawTeacherName && raw.rawTeacherName.trim().length > 0) {
+    const trimmed = raw.rawTeacherName.trim();
+    if (CONFIG.TEACHERS[trimmed]) {
+      teacherName = CONFIG.TEACHERS[trimmed].name;
+      teacherId = CONFIG.TEACHERS[trimmed].id;
+    } else {
+      teacherName = trimmed;
+      teacherId = 'T_' + Utilities.base64EncodeWebSafe(trimmed).substring(0, 6);
+    }
   } else {
-    teacherName = data.teacherName;
-    validationErrors.push(`Unmapped teacher: "${data.teacherName}"`);
+    missingFields.push(CONFIG.FIELDS.TEACHER);
   }
 
-  // Session type validation & fallback
+  // 2. Student Category Validation
+  let studentCategory = CONFIG.FALLBACKS.STUDENT_CATEGORY;
+  if (raw.rawStudentCategory && raw.rawStudentCategory.trim().length > 0) {
+    studentCategory = raw.rawStudentCategory.trim();
+  } else {
+    missingFields.push(CONFIG.FIELDS.STUDENT_CATEGORY);
+  }
+
+  // 3. Duration Hours & Minutes Validation
+  let hours = 0;
+  let minutes = 0;
+
+  if (raw.rawHours !== null && raw.rawHours !== undefined && String(raw.rawHours).trim().length > 0) {
+    const parsedH = parseInt(String(raw.rawHours).replace(/[^\d]/g, ''), 10);
+    if (!isNaN(parsedH) && parsedH >= 0) {
+      hours = parsedH;
+    } else {
+      validationErrors.push(`Invalid hours value: ${raw.rawHours}`);
+    }
+  } else {
+    missingFields.push(CONFIG.FIELDS.HOURS);
+  }
+
+  if (raw.rawMinutes !== null && raw.rawMinutes !== undefined && String(raw.rawMinutes).trim().length > 0) {
+    const parsedM = parseInt(String(raw.rawMinutes).replace(/[^\d]/g, ''), 10);
+    if (!isNaN(parsedM) && parsedM >= 0 && parsedM <= 59) {
+      minutes = parsedM;
+    } else if (!isNaN(parsedM) && parsedM > 59) {
+      minutes = parsedM % 60;
+      hours += Math.floor(parsedM / 60);
+    } else {
+      validationErrors.push(`Invalid minutes value: ${raw.rawMinutes}`);
+    }
+  } else {
+    missingFields.push(CONFIG.FIELDS.MINUTES);
+  }
+
+  const durationTime = String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0');
+  let durationFormatted = '';
+  if (hours > 0 && minutes > 0) {
+    durationFormatted = `${hours} ${hours === 1 ? 'ساعة' : (hours === 2 ? 'ساعتان' : (hours <= 10 ? 'ساعات' : 'ساعة'))} و${minutes} دقيقة`;
+  } else if (hours > 0) {
+    durationFormatted = `${hours} ${hours === 1 ? 'ساعة' : (hours === 2 ? 'ساعتان' : (hours <= 10 ? 'ساعات' : 'ساعة'))}`;
+  } else if (minutes > 0) {
+    durationFormatted = `${minutes} دقيقة`;
+  } else {
+    durationFormatted = '0 دقيقة';
+  }
+
+  // 4. Session Type / Period Extraction from Report
   let sessionType = CONFIG.FALLBACKS.SESSION_TYPE;
   let sessionId = CONFIG.FALLBACKS.SESSION_ID;
-  if (!data.sessionType) {
-    missingFields.push(CONFIG.FIELDS.SESSION_TYPE);
-  } else if (CONFIG.SESSIONS[data.sessionType]) {
-    sessionType = CONFIG.SESSIONS[data.sessionType].name;
-    sessionId = CONFIG.SESSIONS[data.sessionType].id;
-  } else {
-    sessionType = data.sessionType;
-    validationErrors.push(`Unmapped session type: "${data.sessionType}"`);
-  }
 
-  // Student category validation
-  let studentCategory = data.studentCategory;
-  if (!studentCategory) {
-    missingFields.push(CONFIG.FIELDS.STUDENT_CATEGORY);
-    studentCategory = CONFIG.FALLBACKS.STUDENT_CATEGORY;
-  }
-
-  // Date parsing & fallback
-  let dateInfo;
-  let dateIsSystemFallback = false;
-  if (!data.reportDateRaw) {
-    missingFields.push(CONFIG.FIELDS.REPORT_DATE);
-    dateInfo = getFallbackDateInfo();
-    dateIsSystemFallback = true;
-  } else {
-    try {
-      dateInfo = parseReportDate(data.reportDateRaw);
-    } catch (err) {
-      validationErrors.push(`Invalid date format: ${err.message}`);
-      dateInfo = getFallbackDateInfo();
-      dateIsSystemFallback = true;
-    }
-  }
-
-  // Duration validation
-  let duration = data.duration;
-  if (!duration) {
-    missingFields.push(CONFIG.FIELDS.DURATION);
-    duration = CONFIG.FALLBACKS.DURATION;
-  }
-
-  // Student count validation
-  let studentCount = parseInt(data.studentCountRaw, 10);
-  if (!data.studentCountRaw || data.studentCountRaw.trim() === '') {
-    missingFields.push(CONFIG.FIELDS.STUDENT_COUNT);
-    studentCount = CONFIG.FALLBACKS.STUDENT_COUNT;
-  } else if (isNaN(studentCount) || studentCount < 0) {
-    validationErrors.push(`Invalid student count: "${data.studentCountRaw}"`);
-    studentCount = CONFIG.FALLBACKS.STUDENT_COUNT;
-  }
-
-  // Report text validation
-  let reportText = data.reportText;
-  if (!reportText) {
-    missingFields.push(CONFIG.FIELDS.REPORT_TEXT);
-    reportText = CONFIG.FALLBACKS.REPORT_TEXT;
-  }
-
-  // Determine overall validation status
-  let validationStatus = 'VALID';
-  if (missingFields.length > 0 && validationErrors.length > 0) {
-    validationStatus = 'MISSING_AND_INVALID_DATA';
-  } else if (missingFields.length > 0) {
-    validationStatus = 'MISSING DATA';
-  } else if (validationErrors.length > 0) {
-    validationStatus = 'INVALID DATA';
-  }
-
-  return {
-    reportId: Utilities.getUuid(),
-    executionId: executionId,
-    timestamp: new Date().toISOString(),
-    teacherName: teacherName,
-    teacherId: teacherId,
-    sessionType: sessionType,
-    sessionId: sessionId,
-    studentCategory: studentCategory,
-    dateInfo: dateInfo,
-    dateIsSystemFallback: dateIsSystemFallback,
-    duration: duration,
-    studentCount: studentCount,
-    reportText: reportText,
-    adminNotes: data.adminNotes || '',
-    validationStatus: validationStatus,
-    missingFields: missingFields,
-    validationErrors: validationErrors,
-  };
-}
-
-/**
- * Parses raw date input into structured year, Arabic month folder, and DD-MM-YYYY string.
- * @param {string|Date} rawDate
- * @returns {Object}
- */
-function parseReportDate(rawDate) {
-  let year, month, day;
-
-  if (rawDate instanceof Date) {
-    year = rawDate.getFullYear();
-    month = rawDate.getMonth() + 1;
-    day = rawDate.getDate();
-  } else {
-    const str = String(rawDate).trim();
-    const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-    const dmyMatch = str.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/);
-
-    if (isoMatch) {
-      year = parseInt(isoMatch[1], 10);
-      month = parseInt(isoMatch[2], 10);
-      day = parseInt(isoMatch[3], 10);
-    } else if (dmyMatch) {
-      day = parseInt(dmyMatch[1], 10);
-      month = parseInt(dmyMatch[2], 10);
-      year = parseInt(dmyMatch[3], 10);
+  if (raw.bodyMetadata && raw.bodyMetadata.sessionTypeText && raw.bodyMetadata.sessionTypeText.length > 0) {
+    const st = raw.bodyMetadata.sessionTypeText.trim();
+    sessionType = st;
+    if (CONFIG.SESSIONS[st]) {
+      sessionId = CONFIG.SESSIONS[st].id;
     } else {
-      const parsed = new Date(str);
-      if (isNaN(parsed.getTime())) {
-        throw new Error(`Unrecognized date string: "${str}"`);
-      }
-      year = parsed.getFullYear();
-      month = parsed.getMonth() + 1;
-      day = parsed.getDate();
+      sessionId = 'SESSION_' + Utilities.base64EncodeWebSafe(st).substring(0, 6);
+    }
+  } else {
+    missingFields.push('نوع الحلقة (من التقرير)');
+  }
+
+  // 5. Date Text Extraction from Report
+  let reportDateText = '';
+  if (raw.bodyMetadata && raw.bodyMetadata.dateText && raw.bodyMetadata.dateText.length > 0) {
+    reportDateText = raw.bodyMetadata.dateText.trim();
+  } else {
+    missingFields.push('تاريخ التقرير (من التقرير)');
+    reportDateText = '';
+  }
+
+  // 6. Student Count Extraction from Report
+  let studentCount = null;
+  if (raw.bodyMetadata && raw.bodyMetadata.studentCountText && raw.bodyMetadata.studentCountText.length > 0) {
+    const scMatch = raw.bodyMetadata.studentCountText.match(/\d+/);
+    if (scMatch) {
+      studentCount = parseInt(scMatch[0], 10);
     }
   }
-
-  if (month < 1 || month > 12 || day < 1 || day > 31) {
-    throw new Error(`Date out of range: Day=${day}, Month=${month}, Year=${year}`);
+  if (studentCount === null) {
+    missingFields.push('عدد الطلاب (من التقرير)');
   }
 
-  const paddedDay = String(day).padStart(2, '0');
-  const paddedMonth = String(month).padStart(2, '0');
-  const formattedDate = `${paddedDay}-${paddedMonth}-${year}`;
-  const monthFolder = CONFIG.ARABIC_MONTHS[month - 1];
+  // 7. Report Text & Admin Notes
+  const reportText = raw.rawReportText && raw.rawReportText.trim().length > 0
+    ? raw.rawReportText.trim()
+    : CONFIG.FALLBACKS.REPORT_TEXT;
+
+  const adminNotes = raw.rawAdminNotes && raw.rawAdminNotes.trim().length > 0
+    ? raw.rawAdminNotes.trim()
+    : '';
+
+  // 8. Submission Date Formatting (for Folder routing & Fallbacks)
+  const submissionDateObj = startTime;
+  const submissionYear = String(submissionDateObj.getFullYear());
+  const submissionMonthIndex = submissionDateObj.getMonth();
+  const submissionMonthFolderName = CONFIG.ARABIC_MONTHS[submissionMonthIndex] || `${String(submissionMonthIndex + 1).padStart(2, '0')} - شهر`;
+  const submissionDay = String(submissionDateObj.getDate()).padStart(2, '0');
+  const submissionMonth = String(submissionMonthIndex + 1).padStart(2, '0');
+  const submissionDateFormatted = `${submissionDay}-${submissionMonth}-${submissionYear}`;
+
+  const validationStatus = (missingFields.length === 0 && validationErrors.length === 0)
+    ? 'VALID'
+    : 'MISSING DATA';
 
   return {
-    year: String(year),
-    monthFolder: monthFolder,
-    formattedDate: formattedDate,
-  };
-}
-
-/**
- * Generates fallback date info using current project script timezone.
- * @returns {Object}
- */
-function getFallbackDateInfo() {
-  const now = new Date();
-  const timeZone = Session.getScriptTimeZone();
-  const year = Utilities.formatDate(now, timeZone, 'yyyy');
-  const monthIndex = parseInt(Utilities.formatDate(now, timeZone, 'M'), 10) - 1;
-  const formattedDate = Utilities.formatDate(now, timeZone, 'dd-MM-yyyy');
-
-  return {
-    year: year,
-    monthFolder: CONFIG.ARABIC_MONTHS[monthIndex],
-    formattedDate: formattedDate,
+    executionId,
+    submissionTimestamp: raw.submissionTimestamp,
+    submissionDateFormatted,
+    submissionYear,
+    submissionMonthFolderName,
+    teacherName,
+    teacherId,
+    studentCategory,
+    durationHours: hours,
+    durationMinutes: minutes,
+    durationTime,
+    durationFormatted,
+    sessionType,
+    sessionId,
+    reportDateText,
+    studentCount,
+    reportText,
+    adminNotes,
+    validationStatus,
+    missingFields,
+    validationErrors,
   };
 }
 
 // ============================================================================
-// 5. FOLDER MANAGEMENT
+// 6. GOOGLE DRIVE HIERARCHY RESOLUTION
 // ============================================================================
 
 /**
- * Navigates and creates hierarchical path: Root / Year / Teacher / Month.
- * Requires a valid ROOT_FOLDER_ID configured in CONFIG or Script Properties.
- * @param {Object} validData - Validated payload.
- * @returns {GoogleAppsScript.Drive.Folder}
+ * Resolves Root / Year / Teacher / Month folders in Google Drive.
+ * @param {Object} data - Validated data.
+ * @returns {Object} Target folder references.
  */
-function resolveTargetFolder(validData) {
-  const root = getStrictRootFolder();
-  const yearFolder = getOrCreateChildFolder(root, sanitizeFileNamePart(validData.dateInfo.year));
-  const teacherFolder = getOrCreateChildFolder(yearFolder, sanitizeFileNamePart(validData.teacherName));
-  const monthFolder = getOrCreateChildFolder(teacherFolder, sanitizeFileNamePart(validData.dateInfo.monthFolder));
-  return monthFolder;
+function resolveTargetFolder(data) {
+  const rootFolder = getRootFolder();
+
+  // Year folder (e.g. "2026")
+  const yearFolder = getOrCreateChildFolder(rootFolder, data.submissionYear);
+
+  // Year Teacher folder (e.g. "2026 / أسماء علي")
+  const yearTeacherFolder = getOrCreateChildFolder(yearFolder, data.teacherName);
+
+  // Month folder (e.g. "2026 / أسماء علي / 08 - أغسطس")
+  const monthFolder = getOrCreateChildFolder(yearTeacherFolder, data.submissionMonthFolderName);
+
+  return {
+    rootFolder,
+    yearFolder,
+    yearTeacherFolder,
+    monthFolder,
+  };
 }
 
 /**
- * Gets the strictly configured Root Folder by ID.
- * Throws a fatal error if ROOT_FOLDER_ID is missing or not accessible.
+ * Returns the Root Folder for Sana Academy reports.
  * @returns {GoogleAppsScript.Drive.Folder}
  */
-function getStrictRootFolder() {
+function getRootFolder() {
   const rootId = CONFIG.ROOT_FOLDER_ID;
-  if (!rootId || typeof rootId !== 'string' || rootId.trim() === '') {
-    // Attempt lookup by name if ID was not specified
-    const folders = DriveApp.getFoldersByName(CONFIG.ROOT_FOLDER_NAME);
-    if (folders.hasNext()) {
-      const found = folders.next();
-      PropertiesService.getScriptProperties().setProperty('ROOT_FOLDER_ID', found.getId());
-      return found;
+  if (rootId && rootId.trim().length > 0) {
+    try {
+      return DriveApp.getFolderById(rootId.trim());
+    } catch (e) {
+      console.warn(`[DRIVE WARNING] Could not access Root Folder by ID "${rootId}". Falling back to search by name.`);
     }
-    throw new Error(`Root folder ID is not configured. Please set ROOT_FOLDER_ID in script properties or create folder "${CONFIG.ROOT_FOLDER_NAME}".`);
   }
 
-  try {
-    return DriveApp.getFolderById(rootId.trim());
-  } catch (err) {
-    throw new Error(`Failed to access configured Root Folder ID "${rootId}": ${err.message}`);
+  const searchResults = DriveApp.getFoldersByName(CONFIG.ROOT_FOLDER_NAME);
+  if (searchResults.hasNext()) {
+    return searchResults.next();
   }
+
+  return DriveApp.createFolder(CONFIG.ROOT_FOLDER_NAME);
 }
 
 /**
- * Finds child folder by name or creates it inside parent folder.
- * If multiple folders share the same name under the same parent (Drive allows this),
- * the first result is used deterministically and a console warning is emitted.
- * @param {GoogleAppsScript.Drive.Folder} parent
- * @param {string} name
+ * Finds or creates a child folder inside a parent folder.
+ * @param {GoogleAppsScript.Drive.Folder} parentFolder
+ * @param {string} childName
  * @returns {GoogleAppsScript.Drive.Folder}
  */
-function getOrCreateChildFolder(parent, name) {
-  const subFolders = parent.getFoldersByName(name);
-  if (subFolders.hasNext()) {
-    const first = subFolders.next();
-    if (subFolders.hasNext()) {
-      console.warn(`[WARN] Multiple folders named "${name}" found inside "${parent.getName()}". Using the first result.`);
-    }
-    return first;
+function getOrCreateChildFolder(parentFolder, childName) {
+  const sanitizedName = sanitizeFilename(childName);
+  const children = parentFolder.getFoldersByName(sanitizedName);
+  if (children.hasNext()) {
+    return children.next();
   }
-  return parent.createFolder(name);
+  return parentFolder.createFolder(sanitizedName);
 }
 
 // ============================================================================
-// 6. FILE MANAGEMENT, SANITIZATION & DUPLICATE RESOLUTION
+// 7. MARKDOWN GENERATION & SAVING
 // ============================================================================
 
 /**
- * Sanitizes dynamic strings for filesystem path safety.
- * @param {string} text
- * @returns {string}
+ * Generates structured Markdown text with YAML frontmatter and report body.
+ * @param {Object} data - Validated data.
+ * @returns {string} Complete Markdown document string.
  */
-function sanitizeFileNamePart(text) {
-  return String(text || '')
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/[\x00-\x1F\x7F]/g, '')
-    .trim();
+function generateMarkdownContent(data) {
+  const yamlFrontmatter = [
+    '---',
+    `report_id: ${JSON.stringify(data.executionId)}`,
+    `submission_timestamp: ${JSON.stringify(data.submissionTimestamp)}`,
+    `teacher_name: ${JSON.stringify(data.teacherName)}`,
+    `teacher_id: ${JSON.stringify(data.teacherId)}`,
+    `session_type: ${JSON.stringify(data.sessionType)}`,
+    `session_id: ${JSON.stringify(data.sessionId)}`,
+    `student_category: ${JSON.stringify(data.studentCategory)}`,
+    `report_date_text: ${JSON.stringify(data.reportDateText || data.submissionDateFormatted)}`,
+    `duration_hours: ${data.durationHours}`,
+    `duration_minutes: ${data.durationMinutes}`,
+    `duration_time: ${JSON.stringify(data.durationTime)}`,
+    `duration_formatted: ${JSON.stringify(data.durationFormatted)}`,
+    `student_count: ${data.studentCount !== null ? data.studentCount : 'null'}`,
+    `validation_status: ${JSON.stringify(data.validationStatus)}`,
+    `missing_fields: ${JSON.stringify(data.missingFields)}`,
+    '---',
+  ].join('\n');
+
+  const bodyContent = [
+    `# تقرير حلقة: ${data.sessionType} — ${data.teacherName}`,
+    '',
+    `- **اسم المعلم:** ${data.teacherName} (\`${data.teacherId}\`)`,
+    `- **نوع الحلقة:** ${data.sessionType} (\`${data.sessionId}\`)`,
+    `- **فئة الطلاب:** ${data.studentCategory}`,
+    `- **تاريخ التقرير:** ${data.reportDateText || data.submissionDateFormatted}`,
+    `- **مدة الحصة:** ${data.durationFormatted} (\`${data.durationTime}\`)`,
+    `- **عدد الطلاب:** ${data.studentCount !== null ? data.studentCount : 'غير محدد'}`,
+    `- **حالة التحقق:** ${data.validationStatus}`,
+    '',
+    '---',
+    '',
+    '## نص التقرير',
+    '',
+    data.reportText,
+    '',
+    '---',
+    '',
+    '## ملاحظات خاصة للإدارة',
+    '',
+    data.adminNotes || 'لا توجد ملاحظات إدارية.',
+    '',
+  ].join('\n');
+
+  return yamlFrontmatter + '\n\n' + bodyContent;
 }
 
 /**
- * Sanitizes text content to prevent breaking Markdown and YAML frontmatter.
- * @param {string} text
- * @returns {string}
- */
-function sanitizeMarkdownText(text) {
-  if (!text) return '';
-  return String(text)
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    // Prevent breaking horizontal rules or frontmatter boundaries
-    .replace(/^---$/gm, '— — —');
-}
-
-/**
- * Checks for existing files and determines duplicate state.
- * @param {GoogleAppsScript.Drive.Folder} targetFolder
- * @param {Object} validData
- * @returns {Object}
- */
-function resolveFileNameAndDuplicateState(targetFolder, validData) {
-  const safeDate = sanitizeFileNamePart(validData.dateInfo.formattedDate);
-  const safeSession = sanitizeFileNamePart(validData.sessionType);
-  const safeTeacher = sanitizeFileNamePart(validData.teacherName);
-
-  const baseName = `${safeDate}_${safeSession}_${safeTeacher}`;
-  const extension = '.md';
-  const primaryName = `${baseName}${extension}`;
-
-  const hasCollision = targetFolder.getFilesByName(primaryName).hasNext();
-  if (!hasCollision) {
-    return {
-      fileName: primaryName,
-      isDuplicate: false,
-      duplicateIndex: 0,
-    };
-  }
-
-  let counter = 1;
-  let candidateName = `${baseName} (${counter})${extension}`;
-  while (targetFolder.getFilesByName(candidateName).hasNext()) {
-    counter++;
-    candidateName = `${baseName} (${counter})${extension}`;
-  }
-
-  return {
-    fileName: candidateName,
-    isDuplicate: true,
-    duplicateIndex: counter,
-  };
-}
-
-/**
- * Writes the UTF-8 encoded Markdown document into Google Drive.
- * @param {GoogleAppsScript.Drive.Folder} folder
- * @param {string} fileName
+ * Saves Markdown file to the Month folder, checking for collisions and indexing duplicates.
+ * @param {GoogleAppsScript.Drive.Folder} monthFolder
+ * @param {Object} data
  * @param {string} content
  * @returns {GoogleAppsScript.Drive.File}
  */
-function saveMarkdownFile(folder, fileName, content) {
-  const blob = Utilities.newBlob(content, 'text/markdown; charset=UTF-8', fileName);
-  return folder.createFile(blob);
+function saveMarkdownFile(monthFolder, data, content) {
+  const baseName = sanitizeFilename(`${data.submissionDateFormatted}_${data.sessionType}_${data.teacherName}`);
+  let targetFilename = `${baseName}.md`;
+  let duplicateIndex = 0;
+
+  // Check if file exists to determine duplicate index
+  while (monthFolder.getFilesByName(targetFilename).hasNext()) {
+    duplicateIndex++;
+    targetFilename = `${baseName} (${duplicateIndex}).md`;
+  }
+
+  data.isDuplicate = (duplicateIndex > 0);
+  data.duplicateIndex = duplicateIndex;
+
+  const blob = Utilities.newBlob(content, 'text/markdown; charset=UTF-8', targetFilename);
+  return monthFolder.createFile(blob);
 }
 
 /**
- * Verifies that the file was successfully created with a non-empty ID.
+ * Verifies file creation and content integrity in Drive.
  * @param {GoogleAppsScript.Drive.File} file
- * @param {string} expectedName
+ * @param {string} originalContent
  */
-function verifyCreatedFile(file, expectedName) {
-  if (!file) {
-    throw new Error(`File verification failed: Null file object returned for "${expectedName}".`);
+function verifySavedFile(file, originalContent) {
+  if (!file || !file.getId()) {
+    throw new Error('File creation verification failed: file object or ID is missing.');
   }
-  const fileId = file.getId();
-  if (!fileId || typeof fileId !== 'string' || fileId.trim() === '') {
-    throw new Error(`File verification failed: Invalid file ID returned for "${expectedName}".`);
+
+  const size = file.getSize();
+  if (size === 0) {
+    throw new Error(`File creation verification failed: created file "${file.getName()}" has 0 bytes.`);
   }
 }
 
 // ============================================================================
-// 7. MARKDOWN GENERATOR
+// 8. GOOGLE SHEETS MANAGEMENT & LOGGING
 // ============================================================================
 
 /**
- * Builds standard Markdown document with safe YAML frontmatter and clear body sections.
- * @param {Object} d - Validated submission data.
- * @param {Object} fileRes - Duplicate state resolution.
- * @returns {string} Markdown text.
+ * Records the session into the Teacher's yearly Google Sheet under the appropriate monthly tab.
+ * @param {GoogleAppsScript.Drive.Folder} yearTeacherFolder
+ * @param {Object} data
  */
-function generateMarkdown(d, fileRes) {
-  const adminNotesClean = sanitizeMarkdownText(d.adminNotes || CONFIG.FALLBACKS.ADMIN_NOTES);
-  const reportTextClean = sanitizeMarkdownText(d.reportText);
+function recordToTeacherSheet(yearTeacherFolder, data) {
+  const spreadsheet = getOrCreateTeacherSpreadsheet(yearTeacherFolder, data.teacherName, data.submissionYear);
+  const sheet = getOrCreateMonthlyTab(spreadsheet, data.submissionMonthFolderName);
 
-  // Date source label for AI processing clarity
-  const dateSource = d.dateIsSystemFallback ? 'FALLBACK_SYSTEM_DATE' : 'FORM_INPUT';
-  const dateSourceDisplay = d.dateIsSystemFallback
-    ? 'تاريخ النظام (بديل — التاريخ الأصلي غير متوفر)'
-    : 'تاريخ التقرير (أدخله المعلم)';
+  const rowValues = [
+    data.reportDateText || data.submissionDateFormatted,
+    data.sessionType,
+    data.studentCategory,
+    data.durationTime,
+    data.studentCount !== null ? data.studentCount : '',
+    data.isDuplicate ? `(تقرير مكرر) ${data.adminNotes || ''}`.trim() : (data.adminNotes || ''),
+  ];
 
-  // Missing fields formatting
-  let missingFieldsYaml = '[]';
-  let missingFieldsBody = '';
-  if (d.missingFields && d.missingFields.length > 0) {
-    missingFieldsYaml = JSON.stringify(d.missingFields);
-    missingFieldsBody = `\n> [!WARNING]\n> **حقول ناقصة:** ${d.missingFields.join('، ')}\n`;
+  sheet.appendRow(rowValues);
+
+  // Format Duration column (Column D) as plain text / duration to keep leading zeros
+  const lastRow = sheet.getLastRow();
+  sheet.getRange(lastRow, 4).setNumberFormat('@'); // Text format to preserve HH:MM
+
+  // Auto-resize columns to fit content
+  for (let i = 1; i <= CONFIG.SHEET_HEADERS.length; i++) {
+    sheet.autoResizeColumn(i);
+  }
+}
+
+/**
+ * Gets or creates the yearly spreadsheet for a teacher inside their Year/Teacher folder.
+ * Title format: "[اسم المعلم] - تقارير الحلقات [السنة]"
+ * @param {GoogleAppsScript.Drive.Folder} yearTeacherFolder
+ * @param {string} teacherName
+ * @param {string} year
+ * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet}
+ */
+function getOrCreateTeacherSpreadsheet(yearTeacherFolder, teacherName, year) {
+  const expectedTitle = `${teacherName} - تقارير الحلقات ${year}`;
+  const files = yearTeacherFolder.getFilesByName(expectedTitle);
+
+  if (files.hasNext()) {
+    const file = files.next();
+    return SpreadsheetApp.openById(file.getId());
   }
 
-  // Report status formatting in body
-  const reportStatusDisplay = fileRes.isDuplicate
-    ? `تقرير مكرر (نسخة رقم ${fileRes.duplicateIndex})`
-    : 'تقرير أصيل (أول إرسال)';
+  // Create new Spreadsheet
+  const newSpreadsheet = SpreadsheetApp.create(expectedTitle);
+  const newFile = DriveApp.getFileById(newSpreadsheet.getId());
 
-  return `---
-report_id: ${JSON.stringify(d.reportId)}
-execution_id: ${JSON.stringify(d.executionId)}
-submission_timestamp: ${JSON.stringify(d.timestamp)}
-teacher_name: ${JSON.stringify(d.teacherName)}
-teacher_id: ${JSON.stringify(d.teacherId)}
-session_type: ${JSON.stringify(d.sessionType)}
-session_id: ${JSON.stringify(d.sessionId)}
-student_category: ${JSON.stringify(d.studentCategory)}
-report_date: ${JSON.stringify(d.dateInfo.formattedDate)}
-date_source: ${JSON.stringify(dateSource)}
-duration: ${JSON.stringify(d.duration)}
-student_count: ${d.studentCount}
-validation_status: ${JSON.stringify(d.validationStatus)}
-missing_fields: ${missingFieldsYaml}
-is_duplicate: ${fileRes.isDuplicate}
-duplicate_index: ${fileRes.duplicateIndex}
-report_status: ${JSON.stringify(fileRes.isDuplicate ? 'Duplicate submission' : 'Original submission')}
----
+  // Move into the Year/Teacher folder
+  newFile.moveTo(yearTeacherFolder);
 
-# تقرير حلقة: ${d.sessionType} — ${d.teacherName}
+  return newSpreadsheet;
+}
 
-- **اسم المعلم:** ${d.teacherName} (\`${d.teacherId}\`)
-- **نوع الحلقة:** ${d.sessionType} (\`${d.sessionId}\`)
-- **فئة الطلاب:** ${d.studentCategory}
-- **تاريخ التقرير:** ${d.dateInfo.formattedDate}
-- **مصدر التاريخ:** ${dateSourceDisplay}
-- **مدة الحصة:** ${d.duration}
-- **عدد الطلاب:** ${d.studentCount}
-- **حالة التحقق:** ${d.validationStatus}
-- **حالة التقرير (Report Status):** ${reportStatusDisplay}
-${missingFieldsBody}
----
+/**
+ * Gets or creates the monthly tab in the Spreadsheet with RTL formatting and styled headers.
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet
+ * @param {string} monthTabName
+ * @returns {GoogleAppsScript.Spreadsheet.Sheet}
+ */
+function getOrCreateMonthlyTab(spreadsheet, monthTabName) {
+  let sheet = spreadsheet.getSheetByName(monthTabName);
+  if (sheet) {
+    return sheet;
+  }
 
-## نص التقرير
+  // Check if default Sheet1 exists and is completely blank
+  const sheets = spreadsheet.getSheets();
+  if (sheets.length === 1 && sheets[0].getLastRow() === 0) {
+    sheet = sheets[0];
+    sheet.setName(monthTabName);
+  } else {
+    sheet = spreadsheet.insertSheet(monthTabName);
+  }
 
-${reportTextClean}
+  // Set Right-to-Left direction
+  sheet.setRightToLeft(true);
 
----
+  // Set Headers
+  sheet.getRange(1, 1, 1, CONFIG.SHEET_HEADERS.length).setValues([CONFIG.SHEET_HEADERS]);
 
-## ملاحظات خاصة للإدارة
+  // Style Header Row
+  const headerRange = sheet.getRange(1, 1, 1, CONFIG.SHEET_HEADERS.length);
+  headerRange.setBackground('#1f2937'); // Professional dark slate
+  headerRange.setFontColor('#ffffff');
+  headerRange.setFontWeight('bold');
+  headerRange.setHorizontalAlignment('center');
+  headerRange.setVerticalAlignment('middle');
 
-${adminNotesClean}
-`;
+  // Freeze Header Row
+  sheet.setFrozenRows(1);
+
+  // Set Column widths
+  for (let i = 1; i <= CONFIG.SHEET_HEADERS.length; i++) {
+    sheet.autoResizeColumn(i);
+  }
+
+  return sheet;
 }
 
 // ============================================================================
-// 8. RETRY HANDLER
+// 9. ERROR LOGGING & ALERTING
 // ============================================================================
 
 /**
- * Generic retry wrapper with exponential backoff.
- * @param {Function} operation
- * @param {number} maxAttempts
- * @param {string} executionId
+ * Appends error details to the monthly error log in Drive: automation_errors_YYYY_MM.log.
+ * @param {Object} details
  */
-function withRetry(operation, maxAttempts, executionId) {
-  if (maxAttempts < 1) {
-    throw new Error(`withRetry: maxAttempts must be >= 1, got ${maxAttempts}.`);
+function appendErrorToDriveLog(details) {
+  const rootFolder = getRootFolder();
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const logFilename = `${CONFIG.ERROR_LOG_FILENAME_PREFIX}_${year}_${month}.log`;
+
+  const logEntry = [
+    '================================================================================',
+    `Timestamp   : ${details.timestamp}`,
+    `ExecutionID : ${details.executionId}`,
+    `Error       : ${details.error}`,
+    'Stack Trace :',
+    details.stack,
+    '================================================================================',
+    '',
+  ].join('\n');
+
+  const files = rootFolder.getFilesByName(logFilename);
+  if (files.hasNext()) {
+    const file = files.next();
+    const existingContent = file.getBlob().getDataAsString('UTF-8');
+    file.setContent(existingContent + '\n' + logEntry);
+  } else {
+    rootFolder.createFile(logFilename, logEntry, 'text/plain; charset=UTF-8');
   }
+}
 
-  let attempt = 0;
-  let delay = CONFIG.RETRY.INITIAL_DELAY_MS;
+/**
+ * Sends an email notification to the administrator about a fatal error.
+ * @param {Object} details
+ */
+function sendEmailAlert(details) {
+  const recipient = CONFIG.ALERT_EMAIL;
+  if (!recipient) return;
 
-  while (attempt < maxAttempts) {
+  const subject = `[تنبيه أتمتة أكاديمية سنا] خطأ في معالجة تقرير (${details.executionId})`;
+  const body = [
+    'السلام عليكم ورحمة الله وبركاته،',
+    '',
+    'حدث خطأ أثناء معالجة تقرير حلقة في أكاديمية سنا:',
+    '',
+    `• معرّف التنفيذ: ${details.executionId}`,
+    `• التوقيت: ${details.timestamp}`,
+    `• رسالة الخطأ: ${details.error}`,
+    '',
+    'تفاصيل التتبع:',
+    details.stack,
+    '',
+    'تم تسجيل الخطأ في السجل الشهري بـ Google Drive.',
+  ].join('\n');
+
+  MailApp.sendEmail(recipient, subject, body);
+}
+
+// ============================================================================
+// 10. UTILITIES & RETRY ENGINE
+// ============================================================================
+
+/**
+ * Executes a function with exponential backoff retry.
+ */
+function withRetry(fn, maxAttempts, delayMs, backoffMultiplier) {
+  let currentDelay = delayMs;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      attempt++;
-      return operation();
-    } catch (err) {
-      if (attempt >= maxAttempts) {
-        throw err;
+      return fn();
+    } catch (error) {
+      if (attempt === maxAttempts) {
+        throw error;
       }
-      Utilities.sleep(delay);
-      delay *= CONFIG.RETRY.BACKOFF_MULTIPLIER;
+      console.warn(`[RETRY WARNING] Attempt ${attempt}/${maxAttempts} failed: ${error.message}. Retrying in ${currentDelay}ms...`);
+      Utilities.sleep(currentDelay);
+      currentDelay *= backoffMultiplier;
     }
   }
 }
 
-// ============================================================================
-// 9. ERROR LOGGING & NOTIFICATION SERVICE
-// ============================================================================
-
 /**
- * Centralized error handler: logs failure to Drive error log file, console, and sends alert email.
- * @param {Error} error
- * @param {string} executionId
- */
-function handleFatalError(error, executionId) {
-  const timestamp = new Date().toISOString();
-  const errorMessage = error.message || String(error);
-  const errorStack = error.stack || 'No stack trace available.';
-
-  // 1. Console Failure Log
-  console.error(`[FATAL ERROR] [ExecutionID: ${executionId}] [Timestamp: ${timestamp}] ${errorMessage}\nStack: ${errorStack}`);
-
-  // 2. Persist to actual automation_errors.log in Google Drive Root Folder
-  try {
-    appendErrorToDriveLog(executionId, timestamp, errorMessage, errorStack);
-  } catch (logErr) {
-    console.error(`Failed to write to Drive error log file: ${logErr.message}`);
-  }
-
-  // 3. Dispatch Email Alert with Fallback
-  try {
-    sendAlertNotification(executionId, timestamp, errorMessage, errorStack);
-  } catch (emailErr) {
-    console.error(`Failed to send alert email: ${emailErr.message}`);
-  }
-}
-
-/**
- * Appends a structured error record to a monthly log file inside the Root Folder.
- * Log filename format: automation_errors_YYYY_MM.log
- * A new file is created automatically each month.
- * @param {string} executionId
- * @param {string} timestamp
- * @param {string} message
- * @param {string} stack
- */
-function appendErrorToDriveLog(executionId, timestamp, message, stack) {
-  let rootFolder;
-  try {
-    rootFolder = getStrictRootFolder();
-  } catch (_) {
-    // If root folder is completely inaccessible, cannot append to Drive log
-    return;
-  }
-
-  const logFileName = getMonthlyErrorLogFilename();
-  const logEntry = `================================================================================
-Timestamp   : ${timestamp}
-ExecutionID : ${executionId}
-Error       : ${message}
-Stack Trace :
-${stack}
-================================================================================\n\n`;
-
-  const files = rootFolder.getFilesByName(logFileName);
-  if (files.hasNext()) {
-    const logFile = files.next();
-    const existingContent = logFile.getBlob().getDataAsString('UTF-8');
-    logFile.setContent(existingContent + logEntry);
-  } else {
-    rootFolder.createFile(logFileName, logEntry, MimeType.PLAIN_TEXT);
-  }
-}
-
-/**
- * Returns the monthly error log filename for the current month in the script timezone.
- * Format: automation_errors_YYYY_MM.log
+ * Sanitizes strings for safe filename creation.
+ * @param {string} str
  * @returns {string}
  */
-function getMonthlyErrorLogFilename() {
-  const now = new Date();
-  const timeZone = Session.getScriptTimeZone();
-  const yearMonth = Utilities.formatDate(now, timeZone, 'yyyy_MM');
-  return `automation_errors_${yearMonth}.log`;
-}
-
-/**
- * Sends failure notification email to system administrator.
- * @param {string} executionId
- * @param {string} timestamp
- * @param {string} message
- * @param {string} stack
- */
-function sendAlertNotification(executionId, timestamp, message, stack) {
-  const recipient = CONFIG.ALERT_EMAIL;
-  if (!recipient) {
-    return;
-  }
-
-  const subject = `[Alert] Sana Academy Report Automation Failure - ${executionId.substring(0, 8)}`;
-  const body = `Sana Academy Reports Automation encountered a fatal error:
-
-- Execution ID: ${executionId}
-- Timestamp: ${timestamp}
-- Error Message: ${message}
-
-Stack Trace:
-${stack}
-
-This failure has been recorded to ${getMonthlyErrorLogFilename()} in the root Google Drive folder.`;
-
-  MailApp.sendEmail({
-    to: recipient,
-    subject: subject,
-    body: body,
-  });
-}
-
-// ============================================================================
-// 10. UTILITY FUNCTIONS
-// ============================================================================
-
-/**
- * Converts any value safely to a trimmed string.
- * @param {*} val
- * @returns {string}
- */
-function getSafeString(val) {
-  if (val === null || val === undefined) {
-    return '';
-  }
-  return String(val).trim();
+function sanitizeFilename(str) {
+  if (!str) return 'unnamed';
+  return String(str)
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
 }
