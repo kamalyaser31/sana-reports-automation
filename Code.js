@@ -318,6 +318,26 @@ function extractFormData(e) {
 }
 
 /**
+ * Normalizes Eastern Arabic numerals (٠-٩) to standard Western digits (0-9)
+ * and strips invisible/zero-width whitespace.
+ * @param {string} str
+ * @returns {string}
+ */
+function normalizeDigitsAndText(str) {
+  if (!str) return '';
+  const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+  let normalized = String(str)
+    // Replace zero-width and invisible spaces
+    .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, ' ');
+
+  // Replace Eastern Arabic digits with 0-9
+  for (let i = 0; i < 10; i++) {
+    normalized = normalized.split(arabicDigits[i]).join(String(i));
+  }
+  return normalized;
+}
+
+/**
  * Extracts metadata lines (Date, Session/Period, Student Count) directly from report text.
  * @param {string} text - Report body text.
  * @returns {Object} Extracted metadata.
@@ -327,24 +347,27 @@ function parseReportMetadata(text) {
     return { dateText: '', sessionTypeText: '', studentCountText: '' };
   }
 
+  // Clean invisible zero-width spaces
+  const cleanText = text.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, ' ');
+
   let dateText = '';
   let sessionTypeText = '';
   let studentCountText = '';
 
   // Extract Date line: "التاريخ: ..."
-  const dateMatch = text.match(/التاريخ\s*:\s*([^\n\r]+)/);
+  const dateMatch = cleanText.match(/التاريخ\s*[:：]\s*([^\n\r]+)/);
   if (dateMatch && dateMatch[1]) {
     dateText = dateMatch[1].trim();
   }
 
   // Extract Period/Session line: "الفترة: ..." or "نوع الحلقة: ..."
-  const sessionMatch = text.match(/(?:الفترة|نوع الحلقة)\s*:\s*([^\n\r]+)/);
+  const sessionMatch = cleanText.match(/(?:الفترة|نوع الحلقة)\s*[:：]\s*([^\n\r]+)/);
   if (sessionMatch && sessionMatch[1]) {
     sessionTypeText = sessionMatch[1].trim();
   }
 
   // Extract Student Count line: "عدد الطلاب: ..."
-  const studentCountMatch = text.match(/عدد الطلاب\s*:\s*([^\n\r]+)/);
+  const studentCountMatch = cleanText.match(/عدد الطلاب\s*[:：]\s*([^\n\r]+)/);
   if (studentCountMatch && studentCountMatch[1]) {
     studentCountText = studentCountMatch[1].trim();
   }
@@ -420,7 +443,8 @@ function validateFormData(raw, executionId, startTime) {
   let minutes = 0;
 
   if (raw.rawHours !== null && raw.rawHours !== undefined && String(raw.rawHours).trim().length > 0) {
-    const parsedH = parseInt(String(raw.rawHours).replace(/[^\d]/g, ''), 10);
+    const cleanH = normalizeDigitsAndText(raw.rawHours).replace(/[^\d]/g, '');
+    const parsedH = parseInt(cleanH, 10);
     if (!isNaN(parsedH) && parsedH >= 0) {
       hours = parsedH;
     } else {
@@ -431,7 +455,8 @@ function validateFormData(raw, executionId, startTime) {
   }
 
   if (raw.rawMinutes !== null && raw.rawMinutes !== undefined && String(raw.rawMinutes).trim().length > 0) {
-    const parsedM = parseInt(String(raw.rawMinutes).replace(/[^\d]/g, ''), 10);
+    const cleanM = normalizeDigitsAndText(raw.rawMinutes).replace(/[^\d]/g, '');
+    const parsedM = parseInt(cleanM, 10);
     if (!isNaN(parsedM) && parsedM >= 0 && parsedM <= 59) {
       minutes = parsedM;
     } else if (!isNaN(parsedM) && parsedM > 59) {
@@ -484,7 +509,8 @@ function validateFormData(raw, executionId, startTime) {
   // 6. Student Count Extraction from Report
   let studentCount = null;
   if (raw.bodyMetadata && raw.bodyMetadata.studentCountText && raw.bodyMetadata.studentCountText.length > 0) {
-    const scMatch = raw.bodyMetadata.studentCountText.match(/\d+/);
+    const normalizedSc = normalizeDigitsAndText(raw.bodyMetadata.studentCountText);
+    const scMatch = normalizedSc.match(/\d+/);
     if (scMatch) {
       studentCount = parseInt(scMatch[0], 10);
     }
