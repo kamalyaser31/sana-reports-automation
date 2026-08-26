@@ -711,6 +711,7 @@ function verifySavedFile(file, originalContent) {
 
 /**
  * Records the session into the Teacher's yearly Google Sheet under the appropriate monthly tab.
+ * Includes dynamic management of bottom Total and Average summary rows.
  * @param {GoogleAppsScript.Drive.Folder} yearTeacherFolder
  * @param {Object} data
  */
@@ -718,25 +719,102 @@ function recordToTeacherSheet(yearTeacherFolder, data) {
   const spreadsheet = getOrCreateTeacherSpreadsheet(yearTeacherFolder, data.teacherName, data.submissionYear);
   const sheet = getOrCreateMonthlyTab(spreadsheet, data.submissionMonthFolderName);
 
+  // 1. Remove existing summary rows before inserting new record
+  removeSummaryRows(sheet);
+
+  // 2. Compute day fraction for duration so SUM and AVERAGE work natively
+  const hours = data.durationHours || 0;
+  const minutes = data.durationMinutes || 0;
+  const durationDayFraction = (hours / 24) + (minutes / 1440);
+
   const rowValues = [
     data.reportDateText || data.submissionDateFormatted,
     data.sessionType,
     data.studentCategory,
-    data.durationTime,
+    durationDayFraction,
     data.studentCount !== null ? data.studentCount : '',
     data.isDuplicate ? `(تقرير مكرر) ${data.adminNotes || ''}`.trim() : (data.adminNotes || ''),
   ];
 
   sheet.appendRow(rowValues);
 
-  // Format Duration column (Column D) as plain text / duration to keep leading zeros
-  const lastRow = sheet.getLastRow();
-  sheet.getRange(lastRow, 4).setNumberFormat('@'); // Text format to preserve HH:MM
+  // Format the new data row's duration cell
+  const newDataRow = sheet.getLastRow();
+  sheet.getRange(newDataRow, 4).setNumberFormat('[h]:mm');
+  if (data.studentCount !== null) {
+    sheet.getRange(newDataRow, 5).setNumberFormat('0');
+  }
 
-  // Auto-resize columns to fit content
+  // 3. Append dynamic bottom summary rows (Total & Average)
+  appendSummaryRows(sheet);
+
+  // 4. Auto-resize columns to fit content
   for (let i = 1; i <= CONFIG.SHEET_HEADERS.length; i++) {
     sheet.autoResizeColumn(i);
   }
+}
+
+/**
+ * Removes existing summary rows from the bottom of the sheet if present.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ */
+function removeSummaryRows(sheet) {
+  let lastRow = sheet.getLastRow();
+  while (lastRow > 1) {
+    const firstCellVal = String(sheet.getRange(lastRow, 1).getValue()).trim();
+    if (firstCellVal === 'الإجمالي' || firstCellVal === 'المتوسط') {
+      sheet.deleteRow(lastRow);
+      lastRow = sheet.getLastRow();
+    } else {
+      break;
+    }
+  }
+}
+
+/**
+ * Appends formatted Total and Average summary rows at the bottom of the sheet.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ */
+function appendSummaryRows(sheet) {
+  const lastDataRow = sheet.getLastRow();
+  if (lastDataRow < 2) return; // No data rows to summarize
+
+  const totalRowIndex = lastDataRow + 1;
+  const averageRowIndex = lastDataRow + 2;
+
+  // Total Row
+  sheet.appendRow([
+    'الإجمالي',
+    '',
+    '',
+    `=SUM(D2:D${lastDataRow})`,
+    `=SUM(E2:E${lastDataRow})`,
+    '',
+  ]);
+
+  // Average Row
+  sheet.appendRow([
+    'المتوسط',
+    '',
+    '',
+    `=AVERAGE(D2:D${lastDataRow})`,
+    `=AVERAGE(E2:E${lastDataRow})`,
+    '',
+  ]);
+
+  // Format Summary Range
+  const summaryRange = sheet.getRange(totalRowIndex, 1, 2, CONFIG.SHEET_HEADERS.length);
+  summaryRange.setBackground('#f3f4f6'); // Clean neutral light gray
+  summaryRange.setFontWeight('bold');
+
+  // Format Duration column in summary
+  sheet.getRange(totalRowIndex, 4, 2, 1).setNumberFormat('[h]:mm');
+  // Format Students column in summary
+  sheet.getRange(totalRowIndex, 5).setNumberFormat('0');
+  sheet.getRange(averageRowIndex, 5).setNumberFormat('0.0');
+
+  // Center align labels and values
+  sheet.getRange(totalRowIndex, 1, 2, 5).setHorizontalAlignment('center');
 }
 
 /**
