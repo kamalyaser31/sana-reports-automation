@@ -226,6 +226,7 @@ function executeSubmissionPipeline(e, executionId, startTime) {
 
   // Step 5: Save Markdown File with Duplicate Detection and Collision Handling
   const savedFile = saveMarkdownFile(driveTarget.monthFolder, validatedData, markdownContent);
+  validatedData.fileUrl = savedFile.getUrl();
 
   // Step 6: Verify File Integrity in Drive
   verifySavedFile(savedFile, markdownContent);
@@ -942,6 +943,8 @@ function sendTelegramNotification(data) {
     '',
     '📝 <b>ملاحظات الإدارة:</b>',
     escapeHtml(data.adminNotes || 'لا توجد ملاحظات إدارية.'),
+    '',
+    `🔗 <b>رابط التقرير:</b> <a href="${data.fileUrl || '#'}">فتح الملف في Google Drive</a>`,
   ];
 
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
