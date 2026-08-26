@@ -1054,3 +1054,158 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;');
 }
 
+// ============================================================================
+// 12. ON-DEMAND MONTHLY PDF EXPORT ENGINE
+// ============================================================================
+
+/**
+ * Exports all teachers' monthly report tabs as formatted PDFs in their respective month folders in Drive.
+ * Run this function from the Apps Script editor or triggers on demand.
+ * @param {string|number} [targetYear] - Optional year (e.g. 2026). Defaults to current year.
+ * @param {string} [targetMonthName] - Optional month folder name (e.g. "08 - أغسطس"). Defaults to current month.
+ */
+function exportAllTeachersMonthlyPdf(targetYear, targetMonthName) {
+  const now = new Date();
+  const year = String(targetYear || now.getFullYear());
+  const monthName = targetMonthName || CONFIG.ARABIC_MONTHS[now.getMonth()];
+
+  console.log(`[PDF EXPORT] Starting batch export for year: ${year}, month: ${monthName}`);
+
+  const rootFolder = getRootFolder();
+  const yearFolder = getOrCreateChildFolder(rootFolder, year);
+
+  // Iterate over known teachers in CONFIG and teacher folders in Drive
+  const teacherFolders = yearFolder.getFolders();
+  const processedTeachers = new Set();
+  const results = [];
+
+  while (teacherFolders.hasNext()) {
+    const teacherFolder = teacherFolders.next();
+    const teacherName = teacherFolder.getName();
+    processedTeachers.add(teacherName);
+
+    try {
+      const pdfFile = exportTeacherMonthlyPdf(teacherName, year, monthName);
+      if (pdfFile) {
+        results.push({ teacher: teacherName, status: 'SUCCESS', fileId: pdfFile.getId() });
+      } else {
+        results.push({ teacher: teacherName, status: 'SKIPPED (No tab found)' });
+      }
+    } catch (err) {
+      console.error(`[PDF EXPORT ERROR] Failed for teacher "${teacherName}":`, err.message);
+      results.push({ teacher: teacherName, status: 'ERROR', error: err.message });
+    }
+  }
+
+  // Check any additional known teachers from CONFIG
+  for (const tKey in CONFIG.TEACHERS) {
+    if (Object.prototype.hasOwnProperty.call(CONFIG.TEACHERS, tKey)) {
+      const tName = CONFIG.TEACHERS[tKey].name;
+      if (!processedTeachers.has(tName)) {
+        try {
+          const pdfFile = exportTeacherMonthlyPdf(tName, year, monthName);
+          if (pdfFile) {
+            results.push({ teacher: tName, status: 'SUCCESS', fileId: pdfFile.getId() });
+          }
+        } catch (err) {
+          console.error(`[PDF EXPORT ERROR] Failed for teacher "${tName}":`, err.message);
+          results.push({ teacher: tName, status: 'ERROR', error: err.message });
+        }
+      }
+    }
+  }
+
+  console.log(`[PDF EXPORT COMPLETED] Processed ${results.length} teacher(s):`, JSON.stringify(results));
+  return results;
+}
+
+/**
+ * Exports a specific teacher's monthly report tab as a formatted PDF in their month folder.
+ * @param {string} teacherName - Teacher name.
+ * @param {string|number} [targetYear] - Year.
+ * @param {string} [targetMonthName] - Month folder name.
+ * @returns {GoogleAppsScript.Drive.File|null} Created PDF file or null if tab does not exist.
+ */
+function exportTeacherMonthlyPdf(teacherName, targetYear, targetMonthName) {
+  const now = new Date();
+  const year = String(targetYear || now.getFullYear());
+  const monthName = targetMonthName || CONFIG.ARABIC_MONTHS[now.getMonth()];
+
+  const rootFolder = getRootFolder();
+  const yearFolder = getOrCreateChildFolder(rootFolder, year);
+  const teacherFolder = getOrCreateChildFolder(yearFolder, teacherName);
+  const monthFolder = getOrCreateChildFolder(teacherFolder, monthName);
+
+  const spreadsheetTitle = `${teacherName} - تقارير الحلقات ${year}`;
+  const files = teacherFolder.getFilesByName(spreadsheetTitle);
+
+  if (!files.hasNext()) {
+    console.warn(`[PDF EXPORT] Spreadsheet "${spreadsheetTitle}" not found for teacher "${teacherName}".`);
+    return null;
+  }
+
+  const spreadsheet = SpreadsheetApp.openById(files.next().getId());
+  const sheet = spreadsheet.getSheetByName(monthName);
+
+  if (!sheet) {
+    console.warn(`[PDF EXPORT] Tab "${monthName}" not found in spreadsheet "${spreadsheetTitle}".`);
+    return null;
+  }
+
+  const cleanMonth = sanitizeFilename(monthName).replace(/\s+/g, '_');
+  const cleanTeacher = sanitizeFilename(teacherName).replace(/\s+/g, '_');
+  const pdfFilename = `تقرير_شهري_${cleanTeacher}_${cleanMonth}_${year}.pdf`;
+
+  return exportSingleSheetToPdf(spreadsheet, sheet, monthFolder, pdfFilename);
+}
+
+/**
+ * Exports a specific sheet tab from a spreadsheet to PDF and saves it in the target folder.
+ * Idempotently replaces any existing PDF file with the same filename.
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {GoogleAppsScript.Drive.Folder} targetFolder
+ * @param {string} pdfFilename
+ * @returns {GoogleAppsScript.Drive.File}
+ */
+function exportSingleSheetToPdf(spreadsheet, sheet, targetFolder, pdfFilename) {
+  const spreadsheetId = spreadsheet.getId();
+  const sheetId = sheet.getSheetId();
+
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?` +
+    `exportFormat=pdf&format=pdf` +
+    `&size=A4` +
+    `&portrait=false` +
+    `&fitw=true` +
+    `&gridlines=true` +
+    `&printtitle=false` +
+    `&sheetnames=false` +
+    `&fzr=true` +
+    `&gid=${sheetId}`;
+
+  const token = ScriptApp.getOAuthToken();
+  const response = UrlFetchApp.fetch(url, {
+    headers: {
+      'Authorization': 'Bearer ' + token,
+    },
+    muteHttpExceptions: true,
+  });
+
+  const resCode = response.getResponseCode();
+  if (resCode !== 200) {
+    throw new Error(`PDF Export failed with HTTP ${resCode}: ${response.getContentText()}`);
+  }
+
+  const blob = response.getBlob().setName(pdfFilename);
+
+  // Replace existing file if present (Idempotency)
+  const existingFiles = targetFolder.getFilesByName(pdfFilename);
+  while (existingFiles.hasNext()) {
+    existingFiles.next().setTrashed(true);
+  }
+
+  const newPdf = targetFolder.createFile(blob);
+  console.log(`[PDF EXPORT SUCCESS] Created PDF: "${pdfFilename}" (ID: ${newPdf.getId()}) in folder "${targetFolder.getName()}"`);
+  return newPdf;
+}
+
