@@ -103,13 +103,7 @@ const CONFIG = {
       return PropertiesService.getScriptProperties().getProperty('TELEGRAM_BOT_TOKEN') || '8865369925:AAGuMdA4TjKu-D8mU1heLVDqQwn2nOygQFg';
     },
     get CHAT_ID() {
-      const raw = PropertiesService.getScriptProperties().getProperty('TELEGRAM_CHAT_ID') || '-1005179038072';
-      const trimmed = String(raw).trim();
-      // Auto-prefix supergroups missing -100 (e.g. -5179038072 -> -1005179038072)
-      if (trimmed.startsWith('-') && !trimmed.startsWith('-100') && trimmed.length > 8) {
-        return '-100' + trimmed.substring(1);
-      }
-      return trimmed;
+      return PropertiesService.getScriptProperties().getProperty('TELEGRAM_CHAT_ID') || '-5179038072';
     },
   },
 
@@ -1040,11 +1034,6 @@ function sendTelegramNotification(data) {
     return;
   }
 
-  // Ensure supergroup ID has -100 prefix if 10 digits
-  if (chatId.startsWith('-') && !chatId.startsWith('-100') && chatId.length > 8) {
-    chatId = '-100' + chatId.substring(1);
-  }
-
   const messageLines = [
     '📖 <b>تقرير حلقة جديد — أكاديمية سنا</b>',
     '',
@@ -1136,6 +1125,37 @@ function testTelegramConnection() {
 
   sendTelegramNotification(testData);
   console.log('[TELEGRAM DIAGNOSTIC] Test completed. Check your Telegram group/channel now!');
+}
+
+/**
+ * Fetches recent updates from Telegram Bot API to discover the exact Chat ID.
+ * 1. Add @sana_reportsbot to your group/channel.
+ * 2. Send any message in that group/channel (e.g. "test").
+ * 3. Run this function from Apps Script to view the exact chat ID.
+ */
+function getTelegramUpdates() {
+  const botToken = CONFIG.TELEGRAM.BOT_TOKEN;
+  const url = `https://api.telegram.org/bot${botToken}/getUpdates`;
+  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  const rawText = response.getContentText();
+  console.log('[TELEGRAM UPDATES RESULT]:\n' + rawText);
+  try {
+    const json = JSON.parse(rawText);
+    if (json.ok && json.result && json.result.length > 0) {
+      console.log('--- FOUND CHAT IDs ---');
+      json.result.forEach(u => {
+        const msg = u.message || u.channel_post || u.my_chat_member;
+        if (msg && msg.chat) {
+          console.log(`Title: "${msg.chat.title || msg.chat.first_name || 'Direct'}", Type: ${msg.chat.type}, Chat ID: ${msg.chat.id}`);
+        }
+      });
+      console.log('----------------------');
+    } else {
+      console.warn('[TELEGRAM UPDATES] No updates found yet. Make sure you added the bot to the group and sent at least one message inside the group, then run again.');
+    }
+  } catch (e) {
+    console.error('Failed to parse getUpdates response:', e.message);
+  }
 }
 
 /**
