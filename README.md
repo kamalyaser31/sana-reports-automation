@@ -11,6 +11,7 @@
 - **عنوان النموذج:** تقرير حلقات أكاديمية سنا
 - **معرّف النموذج (Form ID):** `1cQC0Gn9whT0V0hWY5S34XeZLqgAHNDhpI4bpxbausXM`
 - **معرّف مشروع Apps Script:** `1oIlpDdcu94rv76YBzbWviGZLRxa1xsViLmEUMI6Y7h_yqgp1hxNHqGwf`
+- **رابط محرر Apps Script:** [فتح المحرر](https://script.google.com/d/1oIlpDdcu94rv76YBzbWviGZLRxa1xsViLmEUMI6Y7h_yqgp1hxNHqGwf/edit)
 - **رابط الاستجابة وملء التقرير:** [رابط النموذج المباشر](https://docs.google.com/forms/d/e/1FAIpQLSfNKy_h48Ia7dhe_zBoGxTdw0dF5qU2rlul-4JYYUX2VCgcyQ/viewform)
 - **رابط التحرير:** [محرر النموذج](https://docs.google.com/forms/d/1cQC0Gn9whT0V0hWY5S34XeZLqgAHNDhpI4bpxbausXM/edit)
 
@@ -124,6 +125,16 @@ clasp push -f
 clasp pull
 ```
 
+### الإعداد الأول بعد كل `clasp push` جديد:
+
+بعد رفع المشروع لأول مرة أو عند تغيير الصلاحيات، افتح [محرر Apps Script](https://script.google.com/d/1oIlpDdcu94rv76YBzbWviGZLRxa1xsViLmEUMI6Y7h_yqgp1hxNHqGwf/edit) وشغّل الدالة التالية **مرة واحدة** لمنح الصلاحيات المطلوبة:
+
+```
+authorizeAndTest()
+```
+
+تجدها في ملف `Diagnostics.js` ضمن القائمة المنسدلة للدوال في أعلى المحرر.
+
 ---
 
 ## 6. الفحص والاختبار (Testing)
@@ -164,7 +175,7 @@ clasp pull
 
 ## 10. بيانات المطور وسجل التغييرات
 
-- **سجل التغييرات:** [CHANGELOG.md](../../CHANGELOG.md)
+- **سجل التغييرات:** [CHANGELOG.md](./CHANGELOG.md)
 - **المطور:** كمال ياسر
 - **البريد الإلكتروني:** `kamalyaser31@gmail.com`
 - **تيليجرام:** [@kamalyaser31](https://t.me/kamalyaser31)

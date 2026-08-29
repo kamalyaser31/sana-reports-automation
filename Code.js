@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * Sana Academy Reports Automation (Version 4 - Enhanced Hybrid Release)
+ * Sana Academy Reports Automation (Version 5.1 - Idiomatic ES6+)
  * ============================================================================
  * Automates receiving Google Form responses for Sana Academy reports:
  * 1. Parses structured metadata (Date, Session/Period, Student Count) directly
@@ -12,81 +12,77 @@
  *    "Teacher Name - تقارير الحلقات Year" with monthly tabs (08 - أغسطس),
  *    RTL direction, styled headers, standard duration (HH:MM), and clean data.
  * 5. Isolates failures, preserves data non-destructively, and logs errors monthly.
+ *
+ * Sensitive values (email, tokens) are loaded from Config.local.js (gitignored).
+ * See Config.local.example.js for setup instructions.
  * ============================================================================
  */
 
 // ============================================================================
-// 1. CONFIGURATION
+// 1. SECRETS RESOLVER
+// ============================================================================
+
+/**
+ * Reads a configuration secret from Config.local.js (primary, gitignored) or
+ * falls back to Script Properties for shared/team environments.
+ * Config.local.js is deployed via clasp push but never committed to git.
+ * @param {string} key
+ * @returns {string}
+ */
+function _getSecret(key) {
+  if (typeof LOCAL_SECRETS !== 'undefined' && LOCAL_SECRETS[key]) {
+    return LOCAL_SECRETS[key];
+  }
+  return PropertiesService.getScriptProperties().getProperty(key) || '';
+}
+
+// ============================================================================
+// 2. CONFIGURATION
 // ============================================================================
 const CONFIG = {
-  // Required: Target Google Drive Root Folder ID.
-  get ROOT_FOLDER_ID() {
-    return PropertiesService.getScriptProperties().getProperty('ROOT_FOLDER_ID') || '';
-  },
+  get ROOT_FOLDER_ID() { return _getSecret('ROOT_FOLDER_ID') || ''; },
 
-  // Fallback Root Folder Name for Drive search and creation
-  ROOT_FOLDER_NAME: 'تقرير حلقات أكاديمية سنا',
-
-  // Error Log File Name prefix inside Root Folder.
-  // Actual filename is monthly: automation_errors_YYYY_MM.log
+  ROOT_FOLDER_NAME:          'تقرير حلقات أكاديمية سنا',
   ERROR_LOG_FILENAME_PREFIX: 'automation_errors',
 
-  // Alert Email Address for Fatal Failures.
-  get ALERT_EMAIL() {
-    return PropertiesService.getScriptProperties().getProperty('ALERT_EMAIL') || 'kamalyaser31@gmail.com';
-  },
+  get ALERT_EMAIL() { return _getSecret('ALERT_EMAIL'); },
 
-  // Concurrency Lock Timeout (30 seconds)
   LOCK_TIMEOUT_MS: 30000,
 
-  // Retry Engine Configuration
   RETRY: {
-    MAX_ATTEMPTS: 3,
-    INITIAL_DELAY_MS: 1000,
+    MAX_ATTEMPTS:       3,
+    INITIAL_DELAY_MS:   1000,
     BACKOFF_MULTIPLIER: 2,
   },
 
-  // Known Teacher Mappings.
   TEACHERS: {
     'محمد نبيل': { id: 'T001', name: 'محمد نبيل' },
     'أسماء علي': { id: 'T002', name: 'أسماء علي' },
   },
 
-  // Internal Session Mappings.
   SESSIONS: {
     'صباحية': { id: 'MORNING', name: 'صباحية' },
     'مسائية': { id: 'EVENING', name: 'مسائية' },
-    'إضافية': { id: 'EXTRA', name: 'إضافية' },
-    'تجويد': { id: 'TAJWEED', name: 'تجويد' },
+    'إضافية': { id: 'EXTRA',   name: 'إضافية'  },
+    'تجويد':  { id: 'TAJWEED', name: 'تجويد'   },
   },
 
-  // Arabic Month Folder Names (Ordered 01 - 12)
   ARABIC_MONTHS: [
-    '01 - يناير',
-    '02 - فبراير',
-    '03 - مارس',
-    '04 - أبريل',
-    '05 - مايو',
-    '06 - يونيو',
-    '07 - يوليو',
-    '08 - أغسطس',
-    '09 - سبتمبر',
-    '10 - أكتوبر',
-    '11 - نوفمبر',
-    '12 - ديسمبر',
+    '01 - يناير', '02 - فبراير', '03 - مارس',
+    '04 - أبريل', '05 - مايو',   '06 - يونيو',
+    '07 - يوليو', '08 - أغسطس', '09 - سبتمبر',
+    '10 - أكتوبر', '11 - نوفمبر', '12 - ديسمبر',
   ],
 
-  // Google Form Fields
   FIELDS: {
-    TEACHER: 'اسم المعلم',
+    TEACHER:          'اسم المعلم',
     STUDENT_CATEGORY: 'فئة الطلاب',
-    HOURS: 'الساعات',
-    MINUTES: 'الدقائق',
-    REPORT_TEXT: 'التقرير',
-    ADMIN_NOTES: 'ملاحظات خاصة للإدارة',
+    HOURS:            'الساعات',
+    MINUTES:          'الدقائق',
+    REPORT_TEXT:      'التقرير',
+    ADMIN_NOTES:      'ملاحظات خاصة للإدارة',
   },
 
-  // Google Sheets Headers for Monthly Tabs
   SHEET_HEADERS: [
     'تاريخ التقرير',
     'نوع الحلقة / الفترة',
@@ -96,56 +92,30 @@ const CONFIG = {
     'ملاحظات الإدارة',
   ],
 
-  // Telegram Bot Notification Configuration
   TELEGRAM: {
     ENABLED: true,
-    get BOT_TOKEN() {
-      return PropertiesService.getScriptProperties().getProperty('TELEGRAM_BOT_TOKEN') || '8865369925:AAGuMdA4TjKu-D8mU1heLVDqQwn2nOygQFg';
-    },
-    get CHAT_ID() {
-      return PropertiesService.getScriptProperties().getProperty('TELEGRAM_CHAT_ID') || '-5179038072';
-    },
+    get BOT_TOKEN() { return _getSecret('TELEGRAM_BOT_TOKEN'); },
+    get CHAT_ID()   { return _getSecret('TELEGRAM_CHAT_ID');   },
   },
 
-  // Fallback Values for Missing Data Preservation
   FALLBACKS: {
-    TEACHER_NAME: 'معلم غير محدد',
-    TEACHER_ID: 'T_UNKNOWN',
-    SESSION_TYPE: 'حلقة غير محددة',
-    SESSION_ID: 'SESSION_UNKNOWN',
-    STUDENT_CATEGORY: 'غير محدد',
-    DURATION_TIME: '00:00',
+    TEACHER_NAME:       'معلم غير محدد',
+    TEACHER_ID:         'T_UNKNOWN',
+    SESSION_TYPE:       'حلقة غير محددة',
+    SESSION_ID:         'SESSION_UNKNOWN',
+    STUDENT_CATEGORY:   'غير محدد',
+    DURATION_TIME:      '00:00',
     DURATION_FORMATTED: 'غير محدد',
-    STUDENT_COUNT: 0,
-    REPORT_TEXT: 'لا يوجد نص للتقرير.',
-    ADMIN_NOTES: 'لا توجد ملاحظات إدارية.',
-    DATE_TEXT: 'تاريخ غير محدد',
+    STUDENT_COUNT:      0,
+    REPORT_TEXT:        'لا يوجد نص للتقرير.',
+    ADMIN_NOTES:        'لا توجد ملاحظات إدارية.',
+    DATE_TEXT:          'تاريخ غير محدد',
   },
 };
 
 // ============================================================================
-// 2. MAIN TRIGGER & AUTHORIZATION ENTRY POINTS
+// 3. MAIN TRIGGER ENTRY POINT
 // ============================================================================
-
-/**
- * Authorization & Self-Test function.
- * Run this function once from the Apps Script editor toolbar to grant permissions.
- */
-function authorizeAndTest() {
-  console.log('Running authorization and self-test...');
-  const mockEvent = {
-    mockData: {
-      'اسم المعلم': 'محمد نبيل',
-      'فئة الطلاب': 'كبار',
-      'الساعات': '1',
-      'الدقائق': '30',
-      'التقرير': '═══ [ تقرير أكاديمية سنا ] ═══\nالتاريخ: 26-08-2026\nالفترة: تجويد\nعدد الطلاب: 6\n━━━━━━━━━━━━━━━\nتقرير تجريبي لتفويض الصلاحيات وإنشاء الجداول.',
-      'ملاحظات خاصة للإدارة': 'تفويض صلاحيات Google Sheets.',
-    },
-  };
-  onFormSubmit(mockEvent);
-  console.log('Authorization and self-test completed successfully!');
-}
 
 /**
  * Handles Form Submit event from Google Forms installable trigger.
@@ -153,10 +123,9 @@ function authorizeAndTest() {
  */
 function onFormSubmit(e) {
   const executionId = Utilities.getUuid();
-  const startTime = new Date();
-
-  const lock = LockService.getScriptLock();
-  let hasLock = false;
+  const startTime   = new Date();
+  const lock        = LockService.getScriptLock();
+  let   hasLock     = false;
 
   try {
     hasLock = lock.tryLock(CONFIG.LOCK_TIMEOUT_MS);
@@ -164,98 +133,91 @@ function onFormSubmit(e) {
       throw new Error(`Could not obtain script lock within ${CONFIG.LOCK_TIMEOUT_MS}ms. Submission queued or throttled.`);
     }
 
-    withRetry(() => {
-      executeSubmissionPipeline(e, executionId, startTime);
-    }, CONFIG.RETRY.MAX_ATTEMPTS, CONFIG.RETRY.INITIAL_DELAY_MS, CONFIG.RETRY.BACKOFF_MULTIPLIER);
+    withRetry(
+      () => executeSubmissionPipeline(e, executionId, startTime),
+      CONFIG.RETRY.MAX_ATTEMPTS,
+      CONFIG.RETRY.INITIAL_DELAY_MS,
+      CONFIG.RETRY.BACKOFF_MULTIPLIER
+    );
 
   } catch (error) {
     const errorDetails = {
-      executionId: executionId,
+      executionId,
       timestamp: startTime.toISOString(),
-      error: error.message,
-      stack: error.stack || 'No stack trace available',
+      error:     error.message,
+      stack:     error.stack || 'No stack trace available',
     };
-
     console.error(`[FATAL ERROR] [ExecutionID: ${executionId}]`, error.message, error.stack);
 
-    try {
-      appendErrorToDriveLog(errorDetails);
-    } catch (logError) {
-      console.error('[LOGGER FAILURE] Failed to write to Drive monthly log:', logError.message);
-    }
+    try { appendErrorToDriveLog(errorDetails); }
+    catch (logError) { console.error('[LOGGER FAILURE] Failed to write Drive log:', logError.message); }
 
-    try {
-      sendEmailAlert(errorDetails);
-    } catch (emailError) {
-      console.error('[ALERT FAILURE] Failed to send email alert:', emailError.message);
-    }
+    try { sendEmailAlert(errorDetails); }
+    catch (emailError) { console.error('[ALERT FAILURE] Failed to send email alert:', emailError.message); }
 
   } finally {
     if (hasLock) {
-      try {
-        lock.releaseLock();
-      } catch (releaseError) {
-        console.warn('[LOCK WARNING] Failed to release lock cleanly:', releaseError.message);
-      }
+      try { lock.releaseLock(); }
+      catch (releaseError) { console.warn('[LOCK WARNING] Failed to release lock cleanly:', releaseError.message); }
     }
   }
 }
 
 // ============================================================================
-// 3. PIPELINE EXECUTION ENGINE
+// 4. PIPELINE EXECUTION ENGINE
 // ============================================================================
 
 /**
  * Executes the full processing pipeline for a single submission.
- * @param {Object} e - Form submit event object.
+ * @param {Object} e           - Form submit event object.
  * @param {string} executionId - Unique UUID for this run.
- * @param {Date} startTime - Execution start timestamp.
+ * @param {Date}   startTime   - Execution start timestamp.
  */
 function executeSubmissionPipeline(e, executionId, startTime) {
-  // Step 1: Extract Form Inputs and Body Metadata
-  const rawData = extractFormData(e);
-
-  // Step 2: Validate and Sanitize Fields (Non-destructive)
-  const validatedData = validateFormData(rawData, executionId, startTime);
-
-  // Step 3: Resolve Storage Hierarchy in Google Drive (Root / Year / Teacher / Month)
-  const driveTarget = resolveTargetFolder(validatedData);
-
-  // Step 4: Generate Markdown Content with YAML Frontmatter
+  const rawData         = extractFormData(e);
+  const validatedData   = validateFormData(rawData, executionId, startTime);
+  const driveTarget     = resolveTargetFolder(validatedData);
   const markdownContent = generateMarkdownContent(validatedData);
 
-  // Step 5: Save Markdown File with Duplicate Detection and Collision Handling
-  const savedFile = saveMarkdownFile(driveTarget.monthFolder, validatedData, markdownContent);
-  validatedData.fileUrl = savedFile.getUrl();
+  const saveResult = saveMarkdownFile(driveTarget.monthFolder, validatedData, markdownContent);
+  validatedData.fileUrl        = saveResult.file.getUrl();
+  validatedData.isDuplicate    = saveResult.isDuplicate;
+  validatedData.duplicateIndex = saveResult.duplicateIndex;
 
-  // Step 6: Verify File Integrity in Drive
-  verifySavedFile(savedFile, markdownContent);
+  verifySavedFile(saveResult.file);
 
-  // Step 7: Record Submission into Teacher's Yearly Google Sheet (Monthly Tab)
+  // Sheets failure is non-fatal: the Markdown file is already saved.
+  // Log to Drive so the failure is not silently discarded.
   try {
     recordToTeacherSheet(driveTarget.yearTeacherFolder, validatedData);
   } catch (sheetError) {
-    console.error(`[SHEET RECORD WARNING] [ExecutionID: ${executionId}] Could not append to teacher sheet:`, sheetError.message);
+    console.error(`[SHEET WARNING] [ExecutionID: ${executionId}] Could not append to teacher sheet:`, sheetError.message);
     appendErrorToDriveLog({
-      executionId: executionId,
+      executionId,
       timestamp: startTime.toISOString(),
-      error: `Google Sheets Warning: ${sheetError.message}`,
-      stack: sheetError.stack || 'No stack trace',
+      error:     `Google Sheets Warning: ${sheetError.message}`,
+      stack:     sheetError.stack || 'No stack trace',
     });
   }
 
-  // Step 8: Send Telegram Admin Notification (Non-blocking)
+  // Telegram is non-fatal: log failures to Drive so they are not silently lost.
   try {
     sendTelegramNotification(validatedData);
   } catch (telegramError) {
-    console.warn(`[TELEGRAM NOTIFICATION WARNING] [ExecutionID: ${executionId}]`, telegramError.message);
+    console.warn(`[TELEGRAM WARNING] [ExecutionID: ${executionId}]`, telegramError.message);
+    appendErrorToDriveLog({
+      executionId,
+      timestamp: startTime.toISOString(),
+      error:     `Telegram Notification Failed: ${telegramError.message}`,
+      stack:     telegramError.stack || 'No stack trace',
+    });
   }
 
-  console.log(`[PIPELINE SUCCESS] [ExecutionID: ${executionId}] Saved: ${savedFile.getName()} in ${driveTarget.monthFolder.getName()}`);
+  console.log(`[PIPELINE SUCCESS] [ExecutionID: ${executionId}] Saved: ${saveResult.file.getName()} in ${driveTarget.monthFolder.getName()}`);
 }
 
 // ============================================================================
-// 4. DATA EXTRACTION & METADATA PARSING
+// 5. DATA EXTRACTION & METADATA PARSING
 // ============================================================================
 
 /**
@@ -268,69 +230,59 @@ function extractFormData(e) {
     throw new Error('Missing event object (e is null or undefined).');
   }
 
-  const values = {};
+  const formFields = {};
 
-  // Form submit trigger provides e.namedValues or e.response (or e.mockData for tests)
   if (e.mockData) {
     for (const key in e.mockData) {
       if (Object.prototype.hasOwnProperty.call(e.mockData, key)) {
-        values[key.trim()] = e.mockData[key];
+        formFields[key.trim()] = e.mockData[key];
       }
     }
   } else if (e.namedValues) {
     for (const key in e.namedValues) {
       if (Object.prototype.hasOwnProperty.call(e.namedValues, key)) {
         const val = e.namedValues[key];
-        values[key.trim()] = Array.isArray(val) ? val[0] : val;
+        formFields[key.trim()] = Array.isArray(val) ? val[0] : val;
       }
     }
   } else if (e.response && typeof e.response.getItemResponses === 'function') {
     const itemResponses = e.response.getItemResponses();
     for (let i = 0; i < itemResponses.length; i++) {
-      const itemResponse = itemResponses[i];
-      const itemTitle = itemResponse.getItem().getTitle().trim();
-      values[itemTitle] = itemResponse.getResponse();
+      const ir = itemResponses[i];
+      formFields[ir.getItem().getTitle().trim()] = ir.getResponse();
     }
   } else {
     throw new Error('Unrecognized event format: neither e.namedValues nor e.response is available.');
   }
 
-  const rawTeacherName = getFieldCaseInsensitive(values, CONFIG.FIELDS.TEACHER);
-  const rawStudentCategory = getFieldCaseInsensitive(values, CONFIG.FIELDS.STUDENT_CATEGORY);
-  const rawHours = getFieldCaseInsensitive(values, CONFIG.FIELDS.HOURS);
-  const rawMinutes = getFieldCaseInsensitive(values, CONFIG.FIELDS.MINUTES);
-  const rawReportText = getFieldCaseInsensitive(values, CONFIG.FIELDS.REPORT_TEXT);
-  const rawAdminNotes = getFieldCaseInsensitive(values, CONFIG.FIELDS.ADMIN_NOTES);
-
-  // Parse embedded metadata from the report body
-  const bodyMetadata = parseReportMetadata(rawReportText || '');
+  const rawReportText = getFieldCaseInsensitive(formFields, CONFIG.FIELDS.REPORT_TEXT);
+  const bodyMetadata  = parseReportMetadata(rawReportText || '');
 
   return {
-    rawTeacherName,
-    rawStudentCategory,
-    rawHours,
-    rawMinutes,
+    rawTeacherName:      getFieldCaseInsensitive(formFields, CONFIG.FIELDS.TEACHER),
+    rawStudentCategory:  getFieldCaseInsensitive(formFields, CONFIG.FIELDS.STUDENT_CATEGORY),
+    rawHours:            getFieldCaseInsensitive(formFields, CONFIG.FIELDS.HOURS),
+    rawMinutes:          getFieldCaseInsensitive(formFields, CONFIG.FIELDS.MINUTES),
     rawReportText,
-    rawAdminNotes,
+    rawAdminNotes:       getFieldCaseInsensitive(formFields, CONFIG.FIELDS.ADMIN_NOTES),
     bodyMetadata,
-    submissionTimestamp: values['Timestamp'] || new Date().toISOString(),
+    submissionTimestamp: formFields['Timestamp'] || new Date().toISOString(),
   };
 }
 
 /**
- * Normalizes Eastern Arabic numerals (٠-٩) to standard Western digits (0-9)
- * and strips invisible/zero-width whitespace.
+ * Normalizes Eastern Arabic numerals (٠-٩) to Western digits (0-9)
+ * and strips invisible/zero-width whitespace characters.
  * @param {string} str
  * @returns {string}
  */
 function normalizeDigitsAndText(str) {
   if (!str) return '';
   const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
-  let normalized = String(str)
-    // Replace zero-width and invisible spaces
-    .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, ' ');
+  let normalized = String(str).replace(/[\u200B-\u200D\uFEFF\u00A0]/g, ' ');
 
-  // Replace Eastern Arabic digits with 0-9
+  // String.prototype.replaceAll is unavailable in the V8 runtime used by Google Apps Script
+  // (pre-ES2021 build). split/join is the standard workaround in this environment.
   for (let i = 0; i < 10; i++) {
     normalized = normalized.split(arabicDigits[i]).join(String(i));
   }
@@ -338,52 +290,32 @@ function normalizeDigitsAndText(str) {
 }
 
 /**
- * Extracts metadata lines (Date, Session/Period, Student Count) directly from report text.
+ * Extracts metadata lines (Date, Session/Period, Student Count) from the report body text.
  * @param {string} text - Report body text.
- * @returns {Object} Extracted metadata.
+ * @returns {Object} Extracted metadata fields.
  */
 function parseReportMetadata(text) {
   if (!text || typeof text !== 'string') {
     return { dateText: '', sessionTypeText: '', studentCountText: '' };
   }
 
-  // Clean invisible zero-width spaces
-  const cleanText = text.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, ' ');
-
-  let dateText = '';
-  let sessionTypeText = '';
-  let studentCountText = '';
-
-  // Extract Date line: "التاريخ: ..."
-  const dateMatch = cleanText.match(/التاريخ\s*[:：]\s*([^\n\r]+)/);
-  if (dateMatch && dateMatch[1]) {
-    dateText = dateMatch[1].trim();
-  }
-
-  // Extract Period/Session line: "الفترة: ..." or "نوع الحلقة: ..."
+  const cleanText    = text.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, ' ');
+  const dateMatch    = cleanText.match(/التاريخ\s*[:：]\s*([^\n\r]+)/);
   const sessionMatch = cleanText.match(/(?:الفترة|نوع الحلقة)\s*[:：]\s*([^\n\r]+)/);
-  if (sessionMatch && sessionMatch[1]) {
-    sessionTypeText = sessionMatch[1].trim();
-  }
-
-  // Extract Student Count line: "عدد الطلاب: ..."
-  const studentCountMatch = cleanText.match(/عدد الطلاب\s*[:：]\s*([^\n\r]+)/);
-  if (studentCountMatch && studentCountMatch[1]) {
-    studentCountText = studentCountMatch[1].trim();
-  }
+  const countMatch   = cleanText.match(/عدد الطلاب\s*[:：]\s*([^\n\r]+)/);
 
   return {
-    dateText,
-    sessionTypeText,
-    studentCountText,
+    dateText:         (dateMatch    && dateMatch[1])    ? dateMatch[1].trim()    : '',
+    sessionTypeText:  (sessionMatch && sessionMatch[1]) ? sessionMatch[1].trim() : '',
+    studentCountText: (countMatch   && countMatch[1])   ? countMatch[1].trim()   : '',
   };
 }
 
 /**
  * Searches for a field value by key name case-insensitively.
- * @param {Object} obj - Named values object.
+ * @param {Object} obj       - Named values object.
  * @param {string} targetKey - Target field name.
- * @returns {string|null} Field value or null.
+ * @returns {string|null}
  */
 function getFieldCaseInsensitive(obj, targetKey) {
   if (!obj || !targetKey) return null;
@@ -391,7 +323,9 @@ function getFieldCaseInsensitive(obj, targetKey) {
   for (const k in obj) {
     if (Object.prototype.hasOwnProperty.call(obj, k)) {
       if (k.trim().toLowerCase() === cleanTarget) {
-        return String(obj[k]).trim();
+        const val = obj[k];
+        // Return null for absent values rather than the literal strings "null"/"undefined".
+        return (val === null || val === undefined) ? null : String(val).trim();
       }
     }
   }
@@ -399,51 +333,56 @@ function getFieldCaseInsensitive(obj, targetKey) {
 }
 
 // ============================================================================
-// 5. VALIDATION & SANITIZATION (NON-DESTRUCTIVE)
+// 6. VALIDATION HELPERS  (private — prefixed with _)
 // ============================================================================
 
 /**
- * Validates extracted fields and applies safe fallbacks without discarding submissions.
- * @param {Object} raw - Raw extracted fields.
- * @param {string} executionId - UUID.
- * @param {Date} startTime - Start time.
- * @returns {Object} Clean validated data structure.
+ * Formats an hour count as an Arabic grammatical label.
+ * Arabic grammar: 1→ساعة, 2→ساعتان, 3–10→ساعات, 11+→ساعة (singular for large numbers).
+ * @param {number} hours
+ * @returns {string}
  */
-function validateFormData(raw, executionId, startTime) {
-  const missingFields = [];
-  const validationErrors = [];
+function _formatArabicHours(hours) {
+  if (hours === 1) return 'ساعة';
+  if (hours === 2) return 'ساعتان';
+  if (hours <= 10) return 'ساعات';
+  return 'ساعة';
+}
 
-  // 1. Teacher Validation & Dynamic ID resolution
-  let teacherName = CONFIG.FALLBACKS.TEACHER_NAME;
-  let teacherId = CONFIG.FALLBACKS.TEACHER_ID;
-
+/**
+ * Resolves the teacher name and ID from raw form input.
+ * @param {Object}   raw          - Raw form data.
+ * @param {string[]} missingFields - Accumulates missing field names.
+ * @returns {{ teacherName: string, teacherId: string }}
+ */
+function _resolveTeacher(raw, missingFields) {
   if (raw.rawTeacherName && raw.rawTeacherName.trim().length > 0) {
     const trimmed = raw.rawTeacherName.trim();
     if (CONFIG.TEACHERS[trimmed]) {
-      teacherName = CONFIG.TEACHERS[trimmed].name;
-      teacherId = CONFIG.TEACHERS[trimmed].id;
-    } else {
-      teacherName = trimmed;
-      teacherId = 'T_' + Utilities.base64EncodeWebSafe(trimmed).substring(0, 6);
+      return { teacherName: CONFIG.TEACHERS[trimmed].name, teacherId: CONFIG.TEACHERS[trimmed].id };
     }
-  } else {
-    missingFields.push(CONFIG.FIELDS.TEACHER);
+    return {
+      teacherName: trimmed,
+      teacherId:   'T_' + Utilities.base64EncodeWebSafe(trimmed).substring(0, 6),
+    };
   }
+  missingFields.push(CONFIG.FIELDS.TEACHER);
+  return { teacherName: CONFIG.FALLBACKS.TEACHER_NAME, teacherId: CONFIG.FALLBACKS.TEACHER_ID };
+}
 
-  // 2. Student Category Validation
-  let studentCategory = CONFIG.FALLBACKS.STUDENT_CATEGORY;
-  if (raw.rawStudentCategory && raw.rawStudentCategory.trim().length > 0) {
-    studentCategory = raw.rawStudentCategory.trim();
-  } else {
-    missingFields.push(CONFIG.FIELDS.STUDENT_CATEGORY);
-  }
-
-  // 3. Duration Hours & Minutes Validation
-  let hours = 0;
+/**
+ * Parses hours and minutes from raw form input and computes formatted duration strings.
+ * @param {Object}   raw              - Raw form data.
+ * @param {string[]} missingFields    - Accumulates missing field names.
+ * @param {string[]} validationErrors - Accumulates validation error messages.
+ * @returns {{ hours: number, minutes: number, durationTime: string, durationFormatted: string }}
+ */
+function _parseDuration(raw, missingFields, validationErrors) {
+  let hours   = 0;
   let minutes = 0;
 
   if (raw.rawHours !== null && raw.rawHours !== undefined && String(raw.rawHours).trim().length > 0) {
-    const cleanH = normalizeDigitsAndText(raw.rawHours).replace(/[^\d]/g, '');
+    const cleanH  = normalizeDigitsAndText(raw.rawHours).replace(/[^\d]/g, '');
     const parsedH = parseInt(cleanH, 10);
     if (!isNaN(parsedH) && parsedH >= 0) {
       hours = parsedH;
@@ -455,13 +394,14 @@ function validateFormData(raw, executionId, startTime) {
   }
 
   if (raw.rawMinutes !== null && raw.rawMinutes !== undefined && String(raw.rawMinutes).trim().length > 0) {
-    const cleanM = normalizeDigitsAndText(raw.rawMinutes).replace(/[^\d]/g, '');
+    const cleanM  = normalizeDigitsAndText(raw.rawMinutes).replace(/[^\d]/g, '');
     const parsedM = parseInt(cleanM, 10);
     if (!isNaN(parsedM) && parsedM >= 0 && parsedM <= 59) {
       minutes = parsedM;
     } else if (!isNaN(parsedM) && parsedM > 59) {
-      minutes = parsedM % 60;
-      hours += Math.floor(parsedM / 60);
+      // Overflow: convert excess minutes into hours.
+      minutes  = parsedM % 60;
+      hours   += Math.floor(parsedM / 60);
     } else {
       validationErrors.push(`Invalid minutes value: ${raw.rawMinutes}`);
     }
@@ -469,73 +409,108 @@ function validateFormData(raw, executionId, startTime) {
     missingFields.push(CONFIG.FIELDS.MINUTES);
   }
 
-  const durationTime = String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0');
-  let durationFormatted = '';
+  const durationTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  let durationFormatted;
   if (hours > 0 && minutes > 0) {
-    durationFormatted = `${hours} ${hours === 1 ? 'ساعة' : (hours === 2 ? 'ساعتان' : (hours <= 10 ? 'ساعات' : 'ساعة'))} و${minutes} دقيقة`;
+    durationFormatted = `${hours} ${_formatArabicHours(hours)} و${minutes} دقيقة`;
   } else if (hours > 0) {
-    durationFormatted = `${hours} ${hours === 1 ? 'ساعة' : (hours === 2 ? 'ساعتان' : (hours <= 10 ? 'ساعات' : 'ساعة'))}`;
+    durationFormatted = `${hours} ${_formatArabicHours(hours)}`;
   } else if (minutes > 0) {
     durationFormatted = `${minutes} دقيقة`;
   } else {
     durationFormatted = '0 دقيقة';
   }
 
-  // 4. Session Type / Period Extraction from Report
-  let sessionType = CONFIG.FALLBACKS.SESSION_TYPE;
-  let sessionId = CONFIG.FALLBACKS.SESSION_ID;
+  return { hours, minutes, durationTime, durationFormatted };
+}
+
+/**
+ * Extracts session type, report date, and student count from embedded report metadata.
+ * @param {Object}   raw          - Raw form data (with bodyMetadata).
+ * @param {string[]} missingFields - Accumulates missing field names.
+ * @returns {{ sessionType, sessionId, reportDateText, studentCount }}
+ */
+function _resolveSessionAndDate(raw, missingFields) {
+  let sessionType    = CONFIG.FALLBACKS.SESSION_TYPE;
+  let sessionId      = CONFIG.FALLBACKS.SESSION_ID;
+  let reportDateText = '';
+  let studentCount   = null;
 
   if (raw.bodyMetadata && raw.bodyMetadata.sessionTypeText && raw.bodyMetadata.sessionTypeText.length > 0) {
     const st = raw.bodyMetadata.sessionTypeText.trim();
     sessionType = st;
-    if (CONFIG.SESSIONS[st]) {
-      sessionId = CONFIG.SESSIONS[st].id;
-    } else {
-      sessionId = 'SESSION_' + Utilities.base64EncodeWebSafe(st).substring(0, 6);
-    }
+    sessionId   = CONFIG.SESSIONS[st]
+      ? CONFIG.SESSIONS[st].id
+      : `SESSION_${Utilities.base64EncodeWebSafe(st).substring(0, 6)}`;
   } else {
     missingFields.push('نوع الحلقة (من التقرير)');
   }
 
-  // 5. Date Text Extraction from Report
-  let reportDateText = '';
   if (raw.bodyMetadata && raw.bodyMetadata.dateText && raw.bodyMetadata.dateText.length > 0) {
     reportDateText = raw.bodyMetadata.dateText.trim();
   } else {
     missingFields.push('تاريخ التقرير (من التقرير)');
-    reportDateText = '';
   }
 
-  // 6. Student Count Extraction from Report
-  let studentCount = null;
   if (raw.bodyMetadata && raw.bodyMetadata.studentCountText && raw.bodyMetadata.studentCountText.length > 0) {
-    const normalizedSc = normalizeDigitsAndText(raw.bodyMetadata.studentCountText);
-    const scMatch = normalizedSc.match(/\d+/);
-    if (scMatch) {
-      studentCount = parseInt(scMatch[0], 10);
-    }
+    const scMatch = normalizeDigitsAndText(raw.bodyMetadata.studentCountText).match(/\d+/);
+    if (scMatch) studentCount = parseInt(scMatch[0], 10);
   }
-  if (studentCount === null) {
-    missingFields.push('عدد الطلاب (من التقرير)');
+  if (studentCount === null) missingFields.push('عدد الطلاب (من التقرير)');
+
+  return { sessionType, sessionId, reportDateText, studentCount };
+}
+
+/**
+ * Formats the submission timestamp into Drive folder-routing components.
+ * @param {Date} startTime
+ * @returns {{ year: string, monthFolderName: string, dateFormatted: string }}
+ */
+function _formatSubmissionDate(startTime) {
+  const year        = String(startTime.getFullYear());
+  const monthIndex  = startTime.getMonth();
+  const monthFolderName = CONFIG.ARABIC_MONTHS[monthIndex]
+    || `${String(monthIndex + 1).padStart(2, '0')} - شهر`;
+  const day   = String(startTime.getDate()).padStart(2, '0');
+  const month = String(monthIndex + 1).padStart(2, '0');
+  return { year, monthFolderName, dateFormatted: `${day}-${month}-${year}` };
+}
+
+// ============================================================================
+// 7. VALIDATION & SANITIZATION (NON-DESTRUCTIVE)
+// ============================================================================
+
+/**
+ * Validates extracted fields and applies safe fallbacks without discarding submissions.
+ * @param {Object} raw         - Raw extracted fields.
+ * @param {string} executionId - UUID.
+ * @param {Date}   startTime   - Start time.
+ * @returns {Object} Clean validated data structure.
+ */
+function validateFormData(raw, executionId, startTime) {
+  const missingFields    = [];
+  const validationErrors = [];
+
+  const teacher      = _resolveTeacher(raw, missingFields);
+  const duration     = _parseDuration(raw, missingFields, validationErrors);
+  const sessionDate  = _resolveSessionAndDate(raw, missingFields);
+  const subDate      = _formatSubmissionDate(startTime);
+
+  let studentCategory;
+  if (raw.rawStudentCategory && raw.rawStudentCategory.trim().length > 0) {
+    studentCategory = raw.rawStudentCategory.trim();
+  } else {
+    missingFields.push(CONFIG.FIELDS.STUDENT_CATEGORY);
+    studentCategory = CONFIG.FALLBACKS.STUDENT_CATEGORY;
   }
 
-  // 7. Report Text & Admin Notes
-  const reportText = raw.rawReportText && raw.rawReportText.trim().length > 0
+  const reportText = (raw.rawReportText && raw.rawReportText.trim().length > 0)
     ? raw.rawReportText.trim()
     : CONFIG.FALLBACKS.REPORT_TEXT;
 
-  const adminNotes = raw.rawAdminNotes && raw.rawAdminNotes.trim().length > 0
+  const adminNotes = (raw.rawAdminNotes && raw.rawAdminNotes.trim().length > 0)
     ? raw.rawAdminNotes.trim()
     : '';
-
-  // 8. Submission Date Formatting (for Folder routing & Fallbacks)
-  const submissionDateObj = startTime;
-  const submissionYear = String(submissionDateObj.getFullYear());
-  const submissionMonthIndex = submissionDateObj.getMonth();
-  const submissionMonthFolderName = CONFIG.ARABIC_MONTHS[submissionMonthIndex] || `${String(submissionMonthIndex + 1).padStart(2, '0')} - شهر`;
-  const submissionDay = String(submissionDateObj.getDate()).padStart(2, '0');
-  const submissionMonth = String(submissionMonthIndex + 1).padStart(2, '0');
-  const submissionDateFormatted = `${submissionDay}-${submissionMonth}-${submissionYear}`;
 
   const validationStatus = (missingFields.length === 0 && validationErrors.length === 0)
     ? 'VALID'
@@ -543,21 +518,21 @@ function validateFormData(raw, executionId, startTime) {
 
   return {
     executionId,
-    submissionTimestamp: raw.submissionTimestamp,
-    submissionDateFormatted,
-    submissionYear,
-    submissionMonthFolderName,
-    teacherName,
-    teacherId,
+    submissionTimestamp:       raw.submissionTimestamp,
+    submissionDateFormatted:   subDate.dateFormatted,
+    submissionYear:            subDate.year,
+    submissionMonthFolderName: subDate.monthFolderName,
+    teacherName:               teacher.teacherName,
+    teacherId:                 teacher.teacherId,
     studentCategory,
-    durationHours: hours,
-    durationMinutes: minutes,
-    durationTime,
-    durationFormatted,
-    sessionType,
-    sessionId,
-    reportDateText,
-    studentCount,
+    durationHours:    duration.hours,
+    durationMinutes:  duration.minutes,
+    durationTime:     duration.durationTime,
+    durationFormatted: duration.durationFormatted,
+    sessionType:      sessionDate.sessionType,
+    sessionId:        sessionDate.sessionId,
+    reportDateText:   sessionDate.reportDateText,
+    studentCount:     sessionDate.studentCount,
     reportText,
     adminNotes,
     validationStatus,
@@ -567,8 +542,24 @@ function validateFormData(raw, executionId, startTime) {
 }
 
 // ============================================================================
-// 6. GOOGLE DRIVE HIERARCHY RESOLUTION
+// 8. GOOGLE DRIVE HIERARCHY RESOLUTION
 // ============================================================================
+
+/**
+ * Navigates or creates a three-level Drive path: Year → Teacher → Month.
+ * Shared by resolveTargetFolder and exportTeacherMonthlyPdf to avoid duplication.
+ * @param {GoogleAppsScript.Drive.Folder} rootFolder
+ * @param {string} year
+ * @param {string} teacherName
+ * @param {string} monthName
+ * @returns {{ yearFolder, teacherFolder, monthFolder }}
+ */
+function _resolveDrivePath(rootFolder, year, teacherName, monthName) {
+  const yearFolder    = getOrCreateChildFolder(rootFolder, year);
+  const teacherFolder = getOrCreateChildFolder(yearFolder, teacherName);
+  const monthFolder   = getOrCreateChildFolder(teacherFolder, monthName);
+  return { yearFolder, teacherFolder, monthFolder };
+}
 
 /**
  * Resolves Root / Year / Teacher / Month folders in Google Drive.
@@ -577,22 +568,9 @@ function validateFormData(raw, executionId, startTime) {
  */
 function resolveTargetFolder(data) {
   const rootFolder = getRootFolder();
-
-  // Year folder (e.g. "2026")
-  const yearFolder = getOrCreateChildFolder(rootFolder, data.submissionYear);
-
-  // Year Teacher folder (e.g. "2026 / أسماء علي")
-  const yearTeacherFolder = getOrCreateChildFolder(yearFolder, data.teacherName);
-
-  // Month folder (e.g. "2026 / أسماء علي / 08 - أغسطس")
-  const monthFolder = getOrCreateChildFolder(yearTeacherFolder, data.submissionMonthFolderName);
-
-  return {
-    rootFolder,
-    yearFolder,
-    yearTeacherFolder,
-    monthFolder,
-  };
+  const { yearFolder, teacherFolder: yearTeacherFolder, monthFolder } =
+    _resolveDrivePath(rootFolder, data.submissionYear, data.teacherName, data.submissionMonthFolderName);
+  return { rootFolder, yearFolder, yearTeacherFolder, monthFolder };
 }
 
 /**
@@ -605,14 +583,12 @@ function getRootFolder() {
     try {
       return DriveApp.getFolderById(rootId.trim());
     } catch (e) {
-      console.warn(`[DRIVE WARNING] Could not access Root Folder by ID "${rootId}". Falling back to search by name.`);
+      console.warn(`[DRIVE WARNING] Could not access Root Folder by ID "${rootId}". Falling back to name search.`);
     }
   }
 
   const searchResults = DriveApp.getFoldersByName(CONFIG.ROOT_FOLDER_NAME);
-  if (searchResults.hasNext()) {
-    return searchResults.next();
-  }
+  if (searchResults.hasNext()) return searchResults.next();
 
   return DriveApp.createFolder(CONFIG.ROOT_FOLDER_NAME);
 }
@@ -626,14 +602,12 @@ function getRootFolder() {
 function getOrCreateChildFolder(parentFolder, childName) {
   const sanitizedName = sanitizeFilename(childName);
   const children = parentFolder.getFoldersByName(sanitizedName);
-  if (children.hasNext()) {
-    return children.next();
-  }
+  if (children.hasNext()) return children.next();
   return parentFolder.createFolder(sanitizedName);
 }
 
 // ============================================================================
-// 7. MARKDOWN GENERATION & SAVING
+// 9. MARKDOWN GENERATION
 // ============================================================================
 
 /**
@@ -687,165 +661,144 @@ function generateMarkdownContent(data) {
     '',
   ].join('\n');
 
-  return yamlFrontmatter + '\n\n' + bodyContent;
+  return `${yamlFrontmatter}\n\n${bodyContent}`;
 }
 
+// ============================================================================
+// 10. FILE SAVING & VERIFICATION
+// ============================================================================
+
 /**
- * Saves Markdown file to the Month folder, checking for collisions and indexing duplicates.
+ * Saves Markdown file to the Month folder with collision-safe naming.
+ * Returns a value object — does NOT mutate the data argument (CQS).
  * @param {GoogleAppsScript.Drive.Folder} monthFolder
  * @param {Object} data
  * @param {string} content
- * @returns {GoogleAppsScript.Drive.File}
+ * @returns {{ file: GoogleAppsScript.Drive.File, isDuplicate: boolean, duplicateIndex: number }}
  */
 function saveMarkdownFile(monthFolder, data, content) {
   const baseName = sanitizeFilename(`${data.submissionDateFormatted}_${data.sessionType}_${data.teacherName}`);
   let targetFilename = `${baseName}.md`;
   let duplicateIndex = 0;
 
-  // Check if file exists to determine duplicate index
   while (monthFolder.getFilesByName(targetFilename).hasNext()) {
     duplicateIndex++;
     targetFilename = `${baseName} (${duplicateIndex}).md`;
   }
 
-  data.isDuplicate = (duplicateIndex > 0);
-  data.duplicateIndex = duplicateIndex;
-
   const blob = Utilities.newBlob(content, 'text/markdown; charset=UTF-8', targetFilename);
-  return monthFolder.createFile(blob);
+  return { file: monthFolder.createFile(blob), isDuplicate: duplicateIndex > 0, duplicateIndex };
 }
 
 /**
- * Verifies file creation and content integrity in Drive.
+ * Verifies file creation integrity in Drive: confirms the file exists and is non-empty.
  * @param {GoogleAppsScript.Drive.File} file
- * @param {string} originalContent
  */
-function verifySavedFile(file, originalContent) {
+function verifySavedFile(file) {
   if (!file || !file.getId()) {
     throw new Error('File creation verification failed: file object or ID is missing.');
   }
-
-  const size = file.getSize();
-  if (size === 0) {
-    throw new Error(`File creation verification failed: created file "${file.getName()}" has 0 bytes.`);
+  if (file.getSize() === 0) {
+    throw new Error(`File creation verification failed: "${file.getName()}" has 0 bytes.`);
   }
 }
 
 // ============================================================================
-// 8. GOOGLE SHEETS MANAGEMENT & LOGGING
+// 11. GOOGLE SHEETS MANAGEMENT & LOGGING
 // ============================================================================
 
 /**
- * Records the session into the Teacher's yearly Google Sheet under the appropriate monthly tab.
- * Includes dynamic management of bottom Total and Average summary rows.
+ * Records the session into the Teacher's yearly Google Sheet under the monthly tab.
  * @param {GoogleAppsScript.Drive.Folder} yearTeacherFolder
  * @param {Object} data
  */
 function recordToTeacherSheet(yearTeacherFolder, data) {
   const spreadsheet = getOrCreateTeacherSpreadsheet(yearTeacherFolder, data.teacherName, data.submissionYear);
-  const sheet = getOrCreateMonthlyTab(spreadsheet, data.submissionMonthFolderName);
+  const sheet       = getOrCreateMonthlyTab(spreadsheet, data.submissionMonthFolderName);
 
-  // 1. Remove existing summary rows before inserting new record
   removeSummaryRows(sheet);
 
-  // 2. Compute day fraction for duration so SUM and AVERAGE work natively
-  const hours = data.durationHours || 0;
-  const minutes = data.durationMinutes || 0;
-  const durationDayFraction = (hours / 24) + (minutes / 1440);
+  // Duration stored as a day fraction so SUM/AVERAGE work natively in Sheets.
+  const durationDayFraction = (data.durationHours / 24) + (data.durationMinutes / 1440);
+  const adminCellValue = data.isDuplicate
+    ? `(تقرير مكرر) ${data.adminNotes || ''}`.trim()
+    : (data.adminNotes || '');
 
-  const rowValues = [
+  sheet.appendRow([
     data.reportDateText || data.submissionDateFormatted,
     data.sessionType,
     data.studentCategory,
     durationDayFraction,
     data.studentCount !== null ? data.studentCount : '',
-    data.isDuplicate ? `(تقرير مكرر) ${data.adminNotes || ''}`.trim() : (data.adminNotes || ''),
-  ];
+    adminCellValue,
+  ]);
 
-  sheet.appendRow(rowValues);
-
-  // Format the new data row's duration cell
   const newDataRow = sheet.getLastRow();
   sheet.getRange(newDataRow, 4).setNumberFormat('[h]:mm');
   if (data.studentCount !== null) {
     sheet.getRange(newDataRow, 5).setNumberFormat('0');
   }
 
-  // 3. Append dynamic bottom summary rows (Total & Average)
   appendSummaryRows(sheet);
 
-  // 4. Auto-resize columns to fit content
   for (let i = 1; i <= CONFIG.SHEET_HEADERS.length; i++) {
     sheet.autoResizeColumn(i);
   }
 }
 
 /**
- * Removes existing summary rows from the bottom of the sheet if present.
+ * Removes existing summary rows (الإجمالي / المتوسط) from the sheet bottom.
+ * Reads column A in a single batch to avoid per-row API calls.
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  */
 function removeSummaryRows(sheet) {
-  let lastRow = sheet.getLastRow();
-  while (lastRow > 1) {
-    const firstCellVal = String(sheet.getRange(lastRow, 1).getValue()).trim();
-    if (firstCellVal === 'الإجمالي' || firstCellVal === 'المتوسط') {
-      sheet.deleteRow(lastRow);
-      lastRow = sheet.getLastRow();
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  // Single batch read — one API call instead of one per row.
+  const columnAValues = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  const summaryLabels = new Set(['الإجمالي', 'المتوسط']);
+
+  // Find the topmost summary row scanning from the bottom; stop at first non-summary.
+  let deleteFrom = -1;
+  for (let i = columnAValues.length - 1; i >= 0; i--) {
+    if (summaryLabels.has(String(columnAValues[i][0]).trim())) {
+      deleteFrom = i + 2; // +1 for 1-based index, +1 for header row offset
     } else {
       break;
     }
   }
+
+  if (deleteFrom > 0) {
+    sheet.deleteRows(deleteFrom, lastRow - deleteFrom + 1);
+  }
 }
 
 /**
- * Appends formatted Total and Average summary rows at the bottom of the sheet.
+ * Appends formatted Total and Average summary rows at the sheet bottom.
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  */
 function appendSummaryRows(sheet) {
-  const lastDataRow = sheet.getLastRow();
-  if (lastDataRow < 2) return; // No data rows to summarize
+  const lastDataRow   = sheet.getLastRow();
+  if (lastDataRow < 2) return;
 
-  const totalRowIndex = lastDataRow + 1;
+  const totalRowIndex   = lastDataRow + 1;
   const averageRowIndex = lastDataRow + 2;
 
-  // Total Row
-  sheet.appendRow([
-    'الإجمالي',
-    '',
-    '',
-    `=SUM(D2:D${lastDataRow})`,
-    `=SUM(E2:E${lastDataRow})`,
-    '',
-  ]);
+  sheet.appendRow(['الإجمالي', '', '', `=SUM(D2:D${lastDataRow})`,     `=SUM(E2:E${lastDataRow})`,     '']);
+  sheet.appendRow(['المتوسط',  '', '', `=AVERAGE(D2:D${lastDataRow})`, `=AVERAGE(E2:E${lastDataRow})`, '']);
 
-  // Average Row
-  sheet.appendRow([
-    'المتوسط',
-    '',
-    '',
-    `=AVERAGE(D2:D${lastDataRow})`,
-    `=AVERAGE(E2:E${lastDataRow})`,
-    '',
-  ]);
-
-  // Format Summary Range
   const summaryRange = sheet.getRange(totalRowIndex, 1, 2, CONFIG.SHEET_HEADERS.length);
-  summaryRange.setBackground('#f3f4f6'); // Clean neutral light gray
+  summaryRange.setBackground('#f3f4f6');
   summaryRange.setFontWeight('bold');
-
-  // Format Duration column in summary
   sheet.getRange(totalRowIndex, 4, 2, 1).setNumberFormat('[h]:mm');
-  // Format Students column in summary
-  sheet.getRange(totalRowIndex, 5).setNumberFormat('0');
+  sheet.getRange(totalRowIndex,   5).setNumberFormat('0');
   sheet.getRange(averageRowIndex, 5).setNumberFormat('0.0');
-
-  // Center align labels and values
   sheet.getRange(totalRowIndex, 1, 2, 5).setHorizontalAlignment('center');
 }
 
 /**
- * Gets or creates the yearly spreadsheet for a teacher inside their Year/Teacher folder.
- * Title format: "[اسم المعلم] - تقارير الحلقات [السنة]"
+ * Gets or creates the yearly spreadsheet for a teacher.
  * @param {GoogleAppsScript.Drive.Folder} yearTeacherFolder
  * @param {string} teacherName
  * @param {string} year
@@ -856,33 +809,25 @@ function getOrCreateTeacherSpreadsheet(yearTeacherFolder, teacherName, year) {
   const files = yearTeacherFolder.getFilesByName(expectedTitle);
 
   if (files.hasNext()) {
-    const file = files.next();
-    return SpreadsheetApp.openById(file.getId());
+    return SpreadsheetApp.openById(files.next().getId());
   }
 
-  // Create new Spreadsheet
   const newSpreadsheet = SpreadsheetApp.create(expectedTitle);
-  const newFile = DriveApp.getFileById(newSpreadsheet.getId());
-
-  // Move into the Year/Teacher folder
-  newFile.moveTo(yearTeacherFolder);
-
+  DriveApp.getFileById(newSpreadsheet.getId()).moveTo(yearTeacherFolder);
   return newSpreadsheet;
 }
 
 /**
- * Gets or creates the monthly tab in the Spreadsheet with RTL formatting and styled headers.
+ * Gets or creates the monthly tab with RTL formatting and styled headers.
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet
  * @param {string} monthTabName
  * @returns {GoogleAppsScript.Spreadsheet.Sheet}
  */
 function getOrCreateMonthlyTab(spreadsheet, monthTabName) {
   let sheet = spreadsheet.getSheetByName(monthTabName);
-  if (sheet) {
-    return sheet;
-  }
+  if (sheet) return sheet;
 
-  // Check if default Sheet1 exists and is completely blank
+  // Reuse the default blank Sheet1 tab if this is a fresh spreadsheet.
   const sheets = spreadsheet.getSheets();
   if (sheets.length === 1 && sheets[0].getLastRow() === 0) {
     sheet = sheets[0];
@@ -891,24 +836,17 @@ function getOrCreateMonthlyTab(spreadsheet, monthTabName) {
     sheet = spreadsheet.insertSheet(monthTabName);
   }
 
-  // Set Right-to-Left direction
   sheet.setRightToLeft(true);
-
-  // Set Headers
   sheet.getRange(1, 1, 1, CONFIG.SHEET_HEADERS.length).setValues([CONFIG.SHEET_HEADERS]);
 
-  // Style Header Row
   const headerRange = sheet.getRange(1, 1, 1, CONFIG.SHEET_HEADERS.length);
-  headerRange.setBackground('#1f2937'); // Professional dark slate
+  headerRange.setBackground('#1f2937');
   headerRange.setFontColor('#ffffff');
   headerRange.setFontWeight('bold');
   headerRange.setHorizontalAlignment('center');
   headerRange.setVerticalAlignment('middle');
 
-  // Freeze Header Row
   sheet.setFrozenRows(1);
-
-  // Set Column widths
   for (let i = 1; i <= CONFIG.SHEET_HEADERS.length; i++) {
     sheet.autoResizeColumn(i);
   }
@@ -917,18 +855,18 @@ function getOrCreateMonthlyTab(spreadsheet, monthTabName) {
 }
 
 // ============================================================================
-// 9. ERROR LOGGING & ALERTING
+// 12. ERROR LOGGING & ALERTING
 // ============================================================================
 
 /**
- * Appends error details to the monthly error log in Drive: automation_errors_YYYY_MM.log.
+ * Appends error details to the monthly log file in Drive: automation_errors_YYYY_MM.log.
  * @param {Object} details
  */
 function appendErrorToDriveLog(details) {
-  const rootFolder = getRootFolder();
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const rootFolder  = getRootFolder();
+  const now         = new Date();
+  const year        = now.getFullYear();
+  const month       = String(now.getMonth() + 1).padStart(2, '0');
   const logFilename = `${CONFIG.ERROR_LOG_FILENAME_PREFIX}_${year}_${month}.log`;
 
   const logEntry = [
@@ -945,8 +883,7 @@ function appendErrorToDriveLog(details) {
   const files = rootFolder.getFilesByName(logFilename);
   if (files.hasNext()) {
     const file = files.next();
-    const existingContent = file.getBlob().getDataAsString('UTF-8');
-    file.setContent(existingContent + '\n' + logEntry);
+    file.setContent(file.getBlob().getDataAsString('UTF-8') + '\n' + logEntry);
   } else {
     rootFolder.createFile(logFilename, logEntry, 'text/plain; charset=UTF-8');
   }
@@ -980,22 +917,29 @@ function sendEmailAlert(details) {
 }
 
 // ============================================================================
-// 10. UTILITIES & RETRY ENGINE
+// 13. UTILITIES & RETRY ENGINE
 // ============================================================================
 
 /**
  * Executes a function with exponential backoff retry.
+ * Errors matching NON_RETRYABLE (quota, rate limit, auth) propagate immediately
+ * without retrying — retrying them wastes execution time and quota.
+ * @param {Function} fn
+ * @param {number}   maxAttempts
+ * @param {number}   delayMs
+ * @param {number}   backoffMultiplier
  */
 function withRetry(fn, maxAttempts, delayMs, backoffMultiplier) {
+  // Quota/auth errors are permanent for this execution window — never retry them.
+  const NON_RETRYABLE = /quota|rate.?limit|exceeded|authorization|invalid.?token/i;
   let currentDelay = delayMs;
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return fn();
     } catch (error) {
-      if (attempt === maxAttempts) {
-        throw error;
-      }
-      console.warn(`[RETRY WARNING] Attempt ${attempt}/${maxAttempts} failed: ${error.message}. Retrying in ${currentDelay}ms...`);
+      if (attempt === maxAttempts || NON_RETRYABLE.test(error.message)) throw error;
+      console.warn(`[RETRY] Attempt ${attempt}/${maxAttempts} failed: ${error.message}. Retrying in ${currentDelay}ms...`);
       Utilities.sleep(currentDelay);
       currentDelay *= backoffMultiplier;
     }
@@ -1016,18 +960,18 @@ function sanitizeFilename(str) {
 }
 
 // ============================================================================
-// 11. TELEGRAM NOTIFICATIONS
+// 14. TELEGRAM NOTIFICATIONS
 // ============================================================================
 
 /**
- * Sends a structured notification card to Telegram admin channel/chat via Telegram Bot API.
+ * Sends a structured notification card to Telegram via Bot API.
  * @param {Object} data - Validated submission data.
  */
 function sendTelegramNotification(data) {
   if (!CONFIG.TELEGRAM.ENABLED) return;
 
   const botToken = CONFIG.TELEGRAM.BOT_TOKEN;
-  let chatId = CONFIG.TELEGRAM.CHAT_ID;
+  const chatId   = CONFIG.TELEGRAM.CHAT_ID;
 
   if (!botToken || !chatId) {
     console.warn('[TELEGRAM WARNING] Bot token or Chat ID is missing. Notification skipped.');
@@ -1045,116 +989,45 @@ function sendTelegramNotification(data) {
   ];
 
   if (data.fileUrl) {
-    messageLines.push(`• <b>رابط التقرير:</b> <a href="${data.fileUrl}">فتح الملف في Google Drive</a>`);
+    messageLines.push(`• <b>رابط التقرير:</b> <a href="${escapeHtml(data.fileUrl)}">فتح الملف في Google Drive</a>`);
   }
-
   if (data.adminNotes && data.adminNotes !== 'لا توجد ملاحظات إدارية.' && data.adminNotes.trim() !== '') {
     messageLines.push(`• <b>ملاحظات الإدارة:</b> ${escapeHtml(data.adminNotes)}`);
   }
 
-  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-  const payload = {
-    chat_id: chatId,
-    text: messageLines.join('\n'),
-    parse_mode: 'HTML',
+  const url            = `https://api.telegram.org/bot${botToken}/sendMessage`;
+  const messagePayload = {
+    text:                     messageLines.join('\n'),
+    parse_mode:               'HTML',
     disable_web_page_preview: true,
   };
 
-  const options = {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
+  // Builder: creates a fresh, immutable options object for each fetch call.
+  // Avoids mutating `const` and prevents shared state between primary and retry calls.
+  const buildOptions = (targetChatId) => ({
+    method:             'post',
+    contentType:        'application/json',
+    payload:            JSON.stringify({ ...messagePayload, chat_id: targetChatId }),
     muteHttpExceptions: true,
-  };
+  });
 
-  const response = UrlFetchApp.fetch(url, options);
-  const resCode = response.getResponseCode();
-  const resText = response.getContentText();
+  const response = UrlFetchApp.fetch(url, buildOptions(chatId));
+  const resCode  = response.getResponseCode();
 
   if (resCode !== 200) {
-    console.warn(`[TELEGRAM ERROR] API returned status ${resCode} for chat ${chatId}: ${resText}`);
-    // If chat not found and ID was negative without -100, retry with -100
+    console.warn(`[TELEGRAM ERROR] Status ${resCode} for chat ${chatId}: ${response.getContentText()}`);
+    // If chatId is a bare negative number missing the supergroup -100 prefix, retry once.
     if (resCode === 400 && !chatId.startsWith('-100')) {
-      const fallbackChatId = '-100' + chatId.replace(/^-/, '');
+      const fallbackChatId = `-100${chatId.replace(/^-/, '')}`;
       console.log(`[TELEGRAM RETRY] Retrying with supergroup ID: ${fallbackChatId}`);
-      payload.chat_id = fallbackChatId;
-      options.payload = JSON.stringify(payload);
-      const retryRes = UrlFetchApp.fetch(url, options);
+      const retryRes = UrlFetchApp.fetch(url, buildOptions(fallbackChatId));
       if (retryRes.getResponseCode() === 200) {
-        console.log('[TELEGRAM SUCCESS] Notification delivered on retry with supergroup ID.');
+        console.log('[TELEGRAM SUCCESS] Delivered on retry with supergroup ID.');
         return;
       }
     }
   } else {
     console.log('[TELEGRAM SUCCESS] Notification delivered successfully.');
-  }
-}
-
-/**
- * Diagnostic function to test Telegram Bot API directly from the Apps Script editor.
- * Run this function from the Apps Script toolbar to verify Telegram notifications.
- */
-function testTelegramConnection() {
-  const botToken = CONFIG.TELEGRAM.BOT_TOKEN;
-  let chatId = CONFIG.TELEGRAM.CHAT_ID;
-
-  console.log('[TELEGRAM DIAGNOSTIC] Starting Telegram connection test...');
-  console.log(`[TELEGRAM DIAGNOSTIC] Bot Token Prefix: ${botToken ? botToken.substring(0, 10) + '...' : 'MISSING'}`);
-  console.log(`[TELEGRAM DIAGNOSTIC] Target Chat ID: ${chatId}`);
-
-  // 1. Verify Bot via getMe
-  const meUrl = `https://api.telegram.org/bot${botToken}/getMe`;
-  const meRes = UrlFetchApp.fetch(meUrl, { muteHttpExceptions: true });
-  console.log(`[TELEGRAM DIAGNOSTIC] getMe status: ${meRes.getResponseCode()}, response: ${meRes.getContentText()}`);
-
-  if (meRes.getResponseCode() !== 200) {
-    throw new Error(`Telegram Bot Token is invalid or blocked! Response: ${meRes.getContentText()}`);
-  }
-
-  // 2. Test Sending Message
-  const testData = {
-    teacherName: 'محمد نبيل (اختبار)',
-    sessionTypeName: 'صباحية',
-    reportDateText: '29-08-2026',
-    durationFormatted: '1 ساعة',
-    durationTime: '01:00',
-    studentCount: 5,
-    fileUrl: 'https://drive.google.com',
-    adminNotes: 'رسالة اختبارية للتأكد من ربط بوت تيليجرام بنجاح.',
-  };
-
-  sendTelegramNotification(testData);
-  console.log('[TELEGRAM DIAGNOSTIC] Test completed. Check your Telegram group/channel now!');
-}
-
-/**
- * Fetches recent updates from Telegram Bot API to discover the exact Chat ID.
- * 1. Add @sana_reportsbot to your group/channel.
- * 2. Send any message in that group/channel (e.g. "test").
- * 3. Run this function from Apps Script to view the exact chat ID.
- */
-function getTelegramUpdates() {
-  const botToken = CONFIG.TELEGRAM.BOT_TOKEN;
-  const url = `https://api.telegram.org/bot${botToken}/getUpdates`;
-  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-  const rawText = response.getContentText();
-  console.log('[TELEGRAM UPDATES RESULT]:\n' + rawText);
-  try {
-    const json = JSON.parse(rawText);
-    if (json.ok && json.result && json.result.length > 0) {
-      console.log('--- FOUND CHAT IDs ---');
-      json.result.forEach(u => {
-        const msg = u.message || u.channel_post || u.my_chat_member;
-        if (msg && msg.chat) {
-          console.log(`Title: "${msg.chat.title || msg.chat.first_name || 'Direct'}", Type: ${msg.chat.type}, Chat ID: ${msg.chat.id}`);
-        }
-      });
-      console.log('----------------------');
-    } else {
-      console.warn('[TELEGRAM UPDATES] No updates found yet. Make sure you added the bot to the group and sent at least one message inside the group, then run again.');
-    }
-  } catch (e) {
-    console.error('Failed to parse getUpdates response:', e.message);
   }
 }
 
@@ -1172,86 +1045,98 @@ function escapeHtml(str) {
 }
 
 // ============================================================================
-// 12. ON-DEMAND MONTHLY PDF EXPORT ENGINE
+// 15. ON-DEMAND MONTHLY PDF EXPORT ENGINE
 // ============================================================================
 
 /**
- * Exports all teachers' monthly report tabs as formatted PDFs in their respective month folders in Drive.
- * Run this function from the Apps Script editor or triggers on demand.
- * @param {string|number} [targetYear] - Optional year (e.g. 2026). Defaults to current year.
- * @param {string} [targetMonthName] - Optional month folder name (e.g. "08 - أغسطس"). Defaults to current month.
+ * Exports all teachers' monthly report tabs as PDFs in their Drive month folders.
+ * @param {string|number} [targetYear]      - Defaults to current year.
+ * @param {string}        [targetMonthName] - Defaults to current month.
+ * @returns {Array<Object>} Per-teacher export result records.
  */
 function exportAllTeachersMonthlyPdf(targetYear, targetMonthName) {
-  const now = new Date();
-  const year = String(targetYear || now.getFullYear());
+  const now       = new Date();
+  const year      = String(targetYear || now.getFullYear());
   const monthName = targetMonthName || CONFIG.ARABIC_MONTHS[now.getMonth()];
 
-  console.log(`[PDF EXPORT] Starting batch export for year: ${year}, month: ${monthName}`);
+  console.log(`[PDF EXPORT] Starting batch export — year: ${year}, month: ${monthName}`);
 
-  const rootFolder = getRootFolder();
-  const yearFolder = getOrCreateChildFolder(rootFolder, year);
-
-  // Iterate over known teachers in CONFIG and teacher folders in Drive
-  const teacherFolders = yearFolder.getFolders();
-  const processedTeachers = new Set();
-  const results = [];
+  const rootFolder      = getRootFolder();
+  const yearFolder      = getOrCreateChildFolder(rootFolder, year);
+  const teacherFolders  = yearFolder.getFolders();
+  const processedNames  = new Set();
+  const results         = [];
 
   while (teacherFolders.hasNext()) {
     const teacherFolder = teacherFolders.next();
-    const teacherName = teacherFolder.getName();
-    processedTeachers.add(teacherName);
-
-    try {
-      const pdfFile = exportTeacherMonthlyPdf(teacherName, year, monthName);
-      if (pdfFile) {
-        results.push({ teacher: teacherName, status: 'SUCCESS', fileId: pdfFile.getId() });
-      } else {
-        results.push({ teacher: teacherName, status: 'SKIPPED (No tab found)' });
-      }
-    } catch (err) {
-      console.error(`[PDF EXPORT ERROR] Failed for teacher "${teacherName}":`, err.message);
-      results.push({ teacher: teacherName, status: 'ERROR', error: err.message });
-    }
+    const teacherName   = teacherFolder.getName();
+    processedNames.add(teacherName);
+    results.push(_exportOneTeacher(teacherName, year, monthName));
   }
 
-  // Check any additional known teachers from CONFIG
+  // Also check CONFIG.TEACHERS in case their Drive folder has not been created yet.
   for (const tKey in CONFIG.TEACHERS) {
     if (Object.prototype.hasOwnProperty.call(CONFIG.TEACHERS, tKey)) {
       const tName = CONFIG.TEACHERS[tKey].name;
-      if (!processedTeachers.has(tName)) {
-        try {
-          const pdfFile = exportTeacherMonthlyPdf(tName, year, monthName);
-          if (pdfFile) {
-            results.push({ teacher: tName, status: 'SUCCESS', fileId: pdfFile.getId() });
-          }
-        } catch (err) {
-          console.error(`[PDF EXPORT ERROR] Failed for teacher "${tName}":`, err.message);
-          results.push({ teacher: tName, status: 'ERROR', error: err.message });
-        }
+      if (!processedNames.has(tName)) {
+        results.push(_exportOneTeacher(tName, year, monthName));
       }
     }
   }
 
-  console.log(`[PDF EXPORT COMPLETED] Processed ${results.length} teacher(s):`, JSON.stringify(results));
+  console.log(`[PDF EXPORT COMPLETED] ${results.length} teacher(s): ${JSON.stringify(results)}`);
   return results;
 }
 
 /**
- * Exports a specific teacher's monthly report tab as a formatted PDF in their month folder.
- * @param {string} teacherName - Teacher name.
- * @param {string|number} [targetYear] - Year.
- * @param {string} [targetMonthName] - Month folder name.
- * @returns {GoogleAppsScript.Drive.File|null} Created PDF file or null if tab does not exist.
+ * Exports one teacher's monthly PDF and returns a result record.
+ * Errors are isolated per teacher and logged to Drive.
+ * @param {string} teacherName
+ * @param {string} year
+ * @param {string} monthName
+ * @returns {Object}
+ */
+function _exportOneTeacher(teacherName, year, monthName) {
+  try {
+    const pdfFile = exportTeacherMonthlyPdf(teacherName, year, monthName);
+    return pdfFile
+      ? { teacher: teacherName, status: 'SUCCESS', fileId: pdfFile.getId() }
+      : { teacher: teacherName, status: 'SKIPPED (No tab found)' };
+  } catch (err) {
+    console.error(`[PDF EXPORT ERROR] Teacher "${teacherName}":`, err.message);
+    appendErrorToDriveLog({
+      executionId: 'PDF_EXPORT',
+      timestamp:   new Date().toISOString(),
+      error:       `PDF export failed for "${teacherName}": ${err.message}`,
+      stack:       err.stack || '',
+    });
+    return { teacher: teacherName, status: 'ERROR', error: err.message };
+  }
+}
+
+/**
+ * Exports a specific teacher's monthly tab as a PDF in their Drive month folder.
+ * @param {string}        teacherName
+ * @param {string|number} [targetYear]
+ * @param {string}        [targetMonthName]
+ * @returns {GoogleAppsScript.Drive.File|null}
  */
 function exportTeacherMonthlyPdf(teacherName, targetYear, targetMonthName) {
-  const now = new Date();
-  const year = String(targetYear || now.getFullYear());
+  const now       = new Date();
+  const year      = String(targetYear || now.getFullYear());
   const monthName = targetMonthName || CONFIG.ARABIC_MONTHS[now.getMonth()];
 
   const rootFolder = getRootFolder();
-  const yearFolder = getOrCreateChildFolder(rootFolder, year);
-  const teacherFolder = getOrCreateChildFolder(yearFolder, teacherName);
-  const monthFolder = getOrCreateChildFolder(teacherFolder, monthName);
+
+  // Navigate existing folders without creating any — we only create the month folder
+  // once we are certain we have a spreadsheet and a tab to export. This prevents
+  // orphaned empty folders in Drive when nothing exists yet for this teacher/month.
+  const yearFolders = rootFolder.getFoldersByName(sanitizeFilename(year));
+  if (!yearFolders.hasNext()) return null;
+
+  const teacherFolders = yearFolders.next().getFoldersByName(sanitizeFilename(teacherName));
+  if (!teacherFolders.hasNext()) return null;
+  const teacherFolder = teacherFolders.next();
 
   const spreadsheetTitle = `${teacherName} - تقارير الحلقات ${year}`;
   const files = teacherFolder.getFilesByName(spreadsheetTitle);
@@ -1262,49 +1147,36 @@ function exportTeacherMonthlyPdf(teacherName, targetYear, targetMonthName) {
   }
 
   const spreadsheet = SpreadsheetApp.openById(files.next().getId());
-  const sheet = spreadsheet.getSheetByName(monthName);
+  const sheet       = spreadsheet.getSheetByName(monthName);
 
   if (!sheet) {
-    console.warn(`[PDF EXPORT] Tab "${monthName}" not found in spreadsheet "${spreadsheetTitle}".`);
+    console.warn(`[PDF EXPORT] Tab "${monthName}" not found in "${spreadsheetTitle}".`);
     return null;
   }
 
-  const cleanMonth = sanitizeFilename(monthName).replace(/\s+/g, '_');
-  const cleanTeacher = sanitizeFilename(teacherName).replace(/\s+/g, '_');
-  const pdfFilename = `تقرير_شهري_${cleanTeacher}_${cleanMonth}_${year}.pdf`;
-
+  // Only now resolve (or create) the month folder — we have a PDF to put there.
+  const monthFolder = getOrCreateChildFolder(teacherFolder, monthName);
+  const pdfFilename = `تقرير_شهري_${sanitizeFilename(teacherName).replace(/\s+/g, '_')}_${sanitizeFilename(monthName).replace(/\s+/g, '_')}_${year}.pdf`;
   return exportSingleSheetToPdf(spreadsheet, sheet, monthFolder, pdfFilename);
 }
 
 /**
- * Exports a specific sheet tab from a spreadsheet to PDF and saves it in the target folder.
- * Idempotently replaces any existing PDF file with the same filename.
+ * Exports a single sheet tab to PDF and saves it idempotently in the target folder.
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
- * @param {GoogleAppsScript.Drive.Folder} targetFolder
- * @param {string} pdfFilename
+ * @param {GoogleAppsScript.Spreadsheet.Sheet}       sheet
+ * @param {GoogleAppsScript.Drive.Folder}            targetFolder
+ * @param {string}                                    pdfFilename
  * @returns {GoogleAppsScript.Drive.File}
  */
 function exportSingleSheetToPdf(spreadsheet, sheet, targetFolder, pdfFilename) {
-  const spreadsheetId = spreadsheet.getId();
-  const sheetId = sheet.getSheetId();
+  const url =
+    `https://docs.google.com/spreadsheets/d/${spreadsheet.getId()}/export?` +
+    `exportFormat=pdf&format=pdf&size=A4&portrait=false&fitw=true` +
+    `&gridlines=true&printtitle=false&sheetnames=false&fzr=true` +
+    `&gid=${sheet.getSheetId()}`;
 
-  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?` +
-    `exportFormat=pdf&format=pdf` +
-    `&size=A4` +
-    `&portrait=false` +
-    `&fitw=true` +
-    `&gridlines=true` +
-    `&printtitle=false` +
-    `&sheetnames=false` +
-    `&fzr=true` +
-    `&gid=${sheetId}`;
-
-  const token = ScriptApp.getOAuthToken();
   const response = UrlFetchApp.fetch(url, {
-    headers: {
-      'Authorization': 'Bearer ' + token,
-    },
+    headers:            { Authorization: `Bearer ${ScriptApp.getOAuthToken()}` },
     muteHttpExceptions: true,
   });
 
@@ -1315,14 +1187,13 @@ function exportSingleSheetToPdf(spreadsheet, sheet, targetFolder, pdfFilename) {
 
   const blob = response.getBlob().setName(pdfFilename);
 
-  // Replace existing file if present (Idempotency)
+  // Idempotent: trash any existing PDF with the same name before creating a fresh one.
   const existingFiles = targetFolder.getFilesByName(pdfFilename);
   while (existingFiles.hasNext()) {
     existingFiles.next().setTrashed(true);
   }
 
   const newPdf = targetFolder.createFile(blob);
-  console.log(`[PDF EXPORT SUCCESS] Created PDF: "${pdfFilename}" (ID: ${newPdf.getId()}) in folder "${targetFolder.getName()}"`);
+  console.log(`[PDF EXPORT SUCCESS] "${pdfFilename}" (ID: ${newPdf.getId()}) in "${targetFolder.getName()}"`);
   return newPdf;
 }
-

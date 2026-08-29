@@ -1,4 +1,6 @@
 **/**
 !Code.js
+!Config.local.js
+!Diagnostics.js
 !Test.js
 !appsscript.json

@@ -1,111 +1,584 @@
 /**
  * ============================================================================
- * Test & Simulation Harness (Sana Academy Reports Automation - Version 4)
+ * Test.js — Comprehensive Regression Test Suite
+ * Sana Academy Reports Automation v5.1
  * ============================================================================
- * Use this file in development/testing environments to verify workflow behavior.
- * Not required for production execution.
+ *
+ * ENTRY POINTS:
+ *   runAllUnitTests()  — اختبارات الوحدة فقط (~3 ثوانٍ، بدون Drive/Sheets)
+ *   runAllTests()      — الجناحان معاً: وحدة + تكاملي (~45 ثانية)
+ *
+ * كيفية التشغيل:
+ *   افتح محرر Apps Script → اختر الدالة من القائمة → Run.
+ *   اقرأ نتيجة كل اختبار في Execution Log.
  * ============================================================================
  */
 
-function testAsmaaSubmissionWithFullReport() {
-  const sampleReportText = `بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ
-═══ [ تقرير أكاديمية سنا لتعليم القرآن الكريم ] ═══
-التاريخ: الاثنين، ٢٤ أغسطس ٢٠٢٦
-الفترة: مسائية
-رقم الحلقة: 
-المدة: 4ساعات وربع 
-المعلم: اسماءM
-عدد الطلاب: 25
-━━━━━━━━━━━━━━━
-الطالبة: منه الله سلامه 
+// ============================================================================
+// ① إطار الاختبار المصغّر (Mini Test Framework)
+// ============================================================================
 
-التسميع:
-جزء الاحقاف 
-التقييم: ممتاز
-━━━━━━━━━━━━━━━
-المراجعة القديمة:
-..
-التقييم: ممتاز
-━━━━━━━━━━━━━━━
-الحفظ الجديد:
-ال عمران من (91:100)
-━━━━━━━━━━━━━━━
-المراجعة:
-نصف سورة الجاثية 
-━━━━━━━━━━━━━━━
-الوسام:
-بداية طيبة، استمر يا بطل 📈
+/** حالة الجلسة — تُصفَّر في بداية كل تشغيل. */
+let _T = { pass: 0, fail: 0, log: [] };
 
-━━━━━━━━━━━━━━━
-*نسأل الله لهم التوفيق.*`;
-
-  const mockEvent = {
-    mockData: {
-      'اسم المعلم': 'أسماء علي',
-      'فئة الطلاب': 'كبار',
-      'الساعات': '4',
-      'الدقائق': '15',
-      'التقرير': sampleReportText,
-      'ملاحظات خاصة للإدارة': 'تقرير كامل لحلقة الإثنين المسائية.',
-    },
-  };
-
-  console.log('Running test: testAsmaaSubmissionWithFullReport');
-  onFormSubmit(mockEvent);
-  console.log('Completed test: testAsmaaSubmissionWithFullReport');
+/** يُسجّل عنواناً فرعياً داخل الجناح الحالي. */
+function _section(label) {
+  _T.log.push(`\n    · ${label}`);
 }
 
-function testNormalSubmission() {
-  const sampleReport = `═══ [ تقرير أكاديمية سنا لتعليم القرآن الكريم ] ═══
-التاريخ: 26-08-2026
-الفترة: تجويد
-عدد الطلاب: 6
-━━━━━━━━━━━━━━━
-تم بحمد الله شرح أحكام النون الساكنة والتنوين مع التطبيق على سورة الملك.`;
-
-  const mockEvent = {
-    mockData: {
-      'اسم المعلم': 'محمد نبيل',
-      'فئة الطلاب': 'كبار',
-      'الساعات': '1',
-      'الدقائق': '30',
-      'التقرير': sampleReport,
-      'ملاحظات خاصة للإدارة': 'تغيب الطالب عبد الرحمن لعذر صحي.',
-    },
-  };
-
-  console.log('Running test: testNormalSubmission');
-  onFormSubmit(mockEvent);
-  console.log('Completed test: testNormalSubmission');
+/** يشغّل جناحاً ويحتجز أي استثناء غير متوقع. */
+function _suite(name, fn) {
+  _T.log.push(`\n╔══ ${name}`);
+  try { fn(); }
+  catch (e) {
+    _T.fail++;
+    _T.log.push(`  ✗ [SUITE CRASHED] ${e.message}\n     ${e.stack}`);
+  }
+  _T.log.push('╚══');
 }
 
-function testDuplicateSubmission() {
-  const sampleReport = `═══ [ تقرير أكاديمية سنا لتعليم القرآن الكريم ] ═══
-التاريخ: 26-08-2026
+/** يُسجّل اختباراً ثنائي القيمة (نجح / فشل). */
+function _ok(cond, name, hint) {
+  if (cond) {
+    _T.pass++;
+    _T.log.push(`  ✓ ${name}`);
+  } else {
+    _T.fail++;
+    _T.log.push(`  ✗ ${name}${hint ? '  →  ' + hint : ''}`);
+  }
+}
+
+/** يقارن بالقيمة (عبر JSON.stringify لدعم المصفوفات والكائنات). */
+function _eq(actual, expected, name) {
+  const a = JSON.stringify(actual);
+  const b = JSON.stringify(expected);
+  _ok(a === b, name, a === b ? '' : `got ${a}, want ${b}`);
+}
+
+/** يتحقق أن القيمة null بالضبط. */
+function _isNull(val, name) {
+  _ok(val === null, name, `expected null, got ${JSON.stringify(val)}`);
+}
+
+/** يتحقق أن السلسلة تحتوي على جزء معيّن. */
+function _has(str, sub, name) {
+  _ok(String(str).includes(sub), name, `"${sub}" not found`);
+}
+
+/** يطبع التقرير النهائي في Execution Log. */
+function _report(label) {
+  const total = _T.pass + _T.fail;
+  const sep   = '═'.repeat(64);
+  const msg   = _T.fail === 0
+    ? `✓  ALL ${total} TESTS PASSED`
+    : `✗  ${_T.fail} FAILED  /  ${total} TOTAL`;
+  console.log([sep, `  ${label || 'RESULT'}`, _T.log.join('\n'), '', sep, `  ${msg}`, sep].join('\n'));
+}
+
+// ============================================================================
+// ② اختبارات الوحدة (Unit Tests)
+// ============================================================================
+
+// ─── normalizeDigitsAndText ──────────────────────────────────────────────────
+function _testNormalize() {
+  _suite('normalizeDigitsAndText', () => {
+    _eq(normalizeDigitsAndText(''),    '',    'empty string → empty');
+    _eq(normalizeDigitsAndText(null),  '',    'null → empty');
+    _eq(normalizeDigitsAndText('123'), '123', 'western digits unchanged');
+    _eq(normalizeDigitsAndText('٠١٢٣٤٥٦٧٨٩'), '0123456789', 'all eastern → western');
+    _eq(normalizeDigitsAndText('عدد الطلاب: ٢٥'), 'عدد الطلاب: 25', 'arabic label + eastern digits');
+    _eq(normalizeDigitsAndText('test\u200Bval'), 'test val', 'zero-width space → space');
+    _eq(normalizeDigitsAndText('abc\uFEFFdef'), 'abc def', 'BOM stripped');
+    _eq(normalizeDigitsAndText('\u00A0'), ' ', 'non-breaking space → space');
+  });
+}
+
+// ─── parseReportMetadata ─────────────────────────────────────────────────────
+function _testParseMetadata() {
+  _suite('parseReportMetadata', () => {
+    _section('empty / invalid input');
+    _eq(parseReportMetadata(''),   { dateText: '', sessionTypeText: '', studentCountText: '' }, 'empty string');
+    _eq(parseReportMetadata(null), { dateText: '', sessionTypeText: '', studentCountText: '' }, 'null input');
+
+    _section('full valid report');
+    const report = `═══ [ تقرير ] ═══\nالتاريخ: 29-08-2026\nالفترة: تجويد\nعدد الطلاب: 8\n━━━\nمتن.`;
+    const m1 = parseReportMetadata(report);
+    _eq(m1.dateText,         '29-08-2026', 'date extracted');
+    _eq(m1.sessionTypeText,  'تجويد',      'session extracted via الفترة');
+    _eq(m1.studentCountText, '8',          'student count extracted');
+
+    _section('نوع الحلقة alias');
+    const report2 = `نوع الحلقة: مسائية\nعدد الطلاب: 12`;
+    _eq(parseReportMetadata(report2).sessionTypeText, 'مسائية', 'نوع الحلقة alias works');
+
+    _section('eastern arabic digits in report');
+    const report3 = `التاريخ: ٢٩-٠٨-٢٠٢٦\nالفترة: صباحية\nعدد الطلاب: ٢٠`;
+    const m3 = parseReportMetadata(report3);
+    _eq(m3.dateText, '٢٩-٠٨-٢٠٢٦', 'date preserved as-is from body');
+    _eq(m3.studentCountText, '٢٠',    'eastern count preserved as-is (normalization is callers job)');
+
+    _section('full-width arabic colon ：');
+    const report4 = `التاريخ：15-08-2026\nالفترة：تجويد\nعدد الطلاب：5`;
+    const m4 = parseReportMetadata(report4);
+    _eq(m4.dateText,        '15-08-2026', 'full-width colon: date');
+    _eq(m4.sessionTypeText, 'تجويد',      'full-width colon: session');
+  });
+}
+
+// ─── getFieldCaseInsensitive ─────────────────────────────────────────────────
+function _testGetFieldCI() {
+  _suite('getFieldCaseInsensitive', () => {
+    const obj = {
+      'اسم المعلم':  'محمد نبيل',
+      ' الساعات ':   '2',
+      'التقرير':     '',
+      'nullField':   null,
+      'undefField':  undefined,
+    };
+
+    _eq(getFieldCaseInsensitive(obj, 'اسم المعلم'),  'محمد نبيل', 'exact match');
+    _eq(getFieldCaseInsensitive(obj, 'الساعات'),     '2',         'trims key whitespace');
+    _eq(getFieldCaseInsensitive(obj, 'NULLFIELD'),   null,        'null value → null (not "null" string)');
+    _eq(getFieldCaseInsensitive(obj, 'UNDEFFIELD'),  null,        'undefined value → null (not "undefined" string)');
+    _eq(getFieldCaseInsensitive(obj, 'التقرير'),     '',          'empty string returned as-is');
+    _isNull(getFieldCaseInsensitive(obj, 'غير موجود'), 'missing key → null');
+    _isNull(getFieldCaseInsensitive(null, 'key'),      'null obj → null');
+  });
+}
+
+// ─── _formatArabicHours ──────────────────────────────────────────────────────
+function _testFormatArabicHours() {
+  _suite('_formatArabicHours', () => {
+    _eq(_formatArabicHours(1),   'ساعة',    '1 → ساعة');
+    _eq(_formatArabicHours(2),   'ساعتان',  '2 → ساعتان');
+    _eq(_formatArabicHours(3),   'ساعات',   '3 → ساعات');
+    _eq(_formatArabicHours(10),  'ساعات',   '10 → ساعات');
+    _eq(_formatArabicHours(11),  'ساعة',    '11 → ساعة (كبير = مفرد)');
+    _eq(_formatArabicHours(100), 'ساعة',    '100 → ساعة');
+  });
+}
+
+// ─── sanitizeFilename ────────────────────────────────────────────────────────
+function _testSanitize() {
+  _suite('sanitizeFilename', () => {
+    _eq(sanitizeFilename(''),           'unnamed',             'empty → unnamed');
+    _eq(sanitizeFilename(null),         'unnamed',             'null → unnamed');
+    _eq(sanitizeFilename('normal'),     'normal',              'clean name unchanged');
+    _eq(sanitizeFilename('a/b\\c:d'),   'a_b_c_d',            'forbidden chars → underscore');
+    _eq(sanitizeFilename(' trim '),     'trim',                'leading/trailing space trimmed');
+    _eq(sanitizeFilename('29-08_تجويد'), '29-08_تجويد',       'arabic + hyphens preserved');
+    _eq(sanitizeFilename('line\nnew'),   'line new',           'newline → space');
+  });
+}
+
+// ─── escapeHtml ──────────────────────────────────────────────────────────────
+function _testEscapeHtml() {
+  _suite('escapeHtml', () => {
+    _eq(escapeHtml(''),         '',          'empty → empty');
+    _eq(escapeHtml(null),       '',          'null → empty');
+    _eq(escapeHtml('plain'),    'plain',     'no special chars unchanged');
+    _eq(escapeHtml('a & b'),    'a &amp; b', '& escaped');
+    _eq(escapeHtml('<b>tag</b>'), '&lt;b&gt;tag&lt;/b&gt;', '< and > escaped');
+    _eq(escapeHtml('a<b>&c'),   'a&lt;b&gt;&amp;c', 'all three combined');
+  });
+}
+
+// ─── _formatSubmissionDate ───────────────────────────────────────────────────
+function _testFormatDate() {
+  _suite('_formatSubmissionDate', () => {
+    const d = _formatSubmissionDate(new Date(2026, 7, 29)); // Aug 29 2026
+    _eq(d.year,            '2026',          'year as string');
+    _eq(d.monthFolderName, '08 - أغسطس',   'arabic month name');
+    _eq(d.dateFormatted,   '29-08-2026',    'DD-MM-YYYY format');
+
+    const d2 = _formatSubmissionDate(new Date(2026, 0, 5)); // Jan 5 2026
+    _eq(d2.monthFolderName, '01 - يناير',  'january arabic');
+    _eq(d2.dateFormatted,   '05-01-2026',   'zero-padded day');
+  });
+}
+
+// ─── _resolveTeacher ─────────────────────────────────────────────────────────
+function _testResolveTeacher() {
+  _suite('_resolveTeacher', () => {
+    _section('معلم معروف');
+    const mf1 = [];
+    const r1 = _resolveTeacher({ rawTeacherName: 'محمد نبيل' }, mf1);
+    _eq(r1.teacherName, 'محمد نبيل', 'known teacher name');
+    _eq(r1.teacherId,   'T001',       'known teacher ID');
+    _eq(mf1.length,     0,            'no missing fields');
+
+    _section('معلم غير مُدرج في CONFIG');
+    const mf2 = [];
+    const r2 = _resolveTeacher({ rawTeacherName: 'معلم جديد' }, mf2);
+    _eq(r2.teacherName,             'معلم جديد', 'unknown teacher name kept');
+    _ok(r2.teacherId.startsWith('T_'), 'unknown teacher gets T_ prefix');
+    _eq(mf2.length, 0,                 'not missing — just unknown');
+
+    _section('اسم فارغ');
+    const mf3 = [];
+    const r3 = _resolveTeacher({ rawTeacherName: '' }, mf3);
+    _eq(r3.teacherName, CONFIG.FALLBACKS.TEACHER_NAME, 'empty → fallback name');
+    _eq(mf3.length,     1,                              'empty → pushed to missingFields');
+
+    _section('اسم null');
+    const mf4 = [];
+    const r4 = _resolveTeacher({ rawTeacherName: null }, mf4);
+    _eq(r4.teacherName, CONFIG.FALLBACKS.TEACHER_NAME, 'null → fallback');
+    _ok(mf4.includes(CONFIG.FIELDS.TEACHER),            'null → correct field in missing list');
+  });
+}
+
+// ─── _parseDuration ──────────────────────────────────────────────────────────
+function _testParseDuration() {
+  _suite('_parseDuration', () => {
+    _section('حالة عادية');
+    const d1 = _parseDuration({ rawHours: '2', rawMinutes: '30' }, [], []);
+    _eq(d1.hours,             2,               'hours');
+    _eq(d1.minutes,           30,              'minutes');
+    _eq(d1.durationTime,      '02:30',         'durationTime HH:MM');
+    _eq(d1.durationFormatted, '2 ساعتان و30 دقيقة', 'Arabic formatted');
+
+    _section('أرقام عربية شرقية');
+    const d2 = _parseDuration({ rawHours: '١', rawMinutes: '١٥' }, [], []);
+    _eq(d2.hours,        1,       'eastern hours');
+    _eq(d2.minutes,      15,      'eastern minutes');
+    _eq(d2.durationTime, '01:15', 'eastern durationTime');
+    _eq(d2.durationFormatted, '1 ساعة و15 دقيقة', 'eastern Arabic formatted');
+
+    _section('تجاوز الدقائق (overflow)');
+    const d3 = _parseDuration({ rawHours: '1', rawMinutes: '90' }, [], []);
+    _eq(d3.hours,   2,  '1h + 90min → 2h');
+    _eq(d3.minutes, 30, '90min remainder → 30');
+
+    _section('صفر ساعات وصفر دقائق');
+    const d4 = _parseDuration({ rawHours: '0', rawMinutes: '0' }, [], []);
+    _eq(d4.durationFormatted, '0 دقيقة', 'zero → 0 دقيقة');
+    _eq(d4.durationTime,      '00:00',   'zero time HH:MM');
+
+    _section('دقائق فقط');
+    const d5 = _parseDuration({ rawHours: '0', rawMinutes: '45' }, [], []);
+    _eq(d5.durationFormatted, '45 دقيقة', 'minutes-only format');
+
+    _section('حقول مفقودة');
+    const mf6 = []; const d6 = _parseDuration({ rawHours: null, rawMinutes: null }, mf6, []);
+    _ok(mf6.includes(CONFIG.FIELDS.HOURS),   'null hours → missing');
+    _ok(mf6.includes(CONFIG.FIELDS.MINUTES), 'null minutes → missing');
+
+    _section('قيمة غير صالحة');
+    const ve7 = []; _parseDuration({ rawHours: 'abc', rawMinutes: '30' }, [], ve7);
+    _ok(ve7.length > 0, 'non-numeric hours → validationErrors');
+
+    _section('ساعة واحدة بدون دقائق');
+    const d8 = _parseDuration({ rawHours: '1', rawMinutes: '0' }, [], []);
+    _eq(d8.durationFormatted, '1 ساعة', 'hour-only format');
+  });
+}
+
+// ─── _resolveSessionAndDate ──────────────────────────────────────────────────
+function _testResolveSession() {
+  _suite('_resolveSessionAndDate', () => {
+    _section('بيانات كاملة — فترة معروفة');
+    const r1 = _resolveSessionAndDate({
+      bodyMetadata: { sessionTypeText: 'تجويد', dateText: '29-08-2026', studentCountText: '8' }
+    }, []);
+    _eq(r1.sessionType,    'تجويد',      'session type');
+    _eq(r1.sessionId,      'TAJWEED',    'known session ID');
+    _eq(r1.reportDateText, '29-08-2026', 'date');
+    _eq(r1.studentCount,   8,            'student count');
+
+    _section('فترة غير مُدرجة في CONFIG');
+    const r2 = _resolveSessionAndDate({
+      bodyMetadata: { sessionTypeText: 'حلقة خاصة', dateText: '01-09-2026', studentCountText: '3' }
+    }, []);
+    _ok(r2.sessionId.startsWith('SESSION_'), 'unknown session → SESSION_ prefix');
+
+    _section('أرقام عربية في عدد الطلاب');
+    const r3 = _resolveSessionAndDate({
+      bodyMetadata: { sessionTypeText: 'مسائية', dateText: '29-08-2026', studentCountText: '٢٥' }
+    }, []);
+    _eq(r3.studentCount, 25, 'eastern arabic student count normalized');
+
+    _section('بيانات مفقودة كلياً');
+    const mf4 = [];
+    const r4 = _resolveSessionAndDate({ bodyMetadata: { sessionTypeText: '', dateText: '', studentCountText: '' } }, mf4);
+    _eq(r4.sessionType, CONFIG.FALLBACKS.SESSION_TYPE, 'fallback session type');
+    _ok(mf4.length >= 3, 'all three fields added to missing list');
+  });
+}
+
+// ─── validateFormData ────────────────────────────────────────────────────────
+function _testValidate() {
+  _suite('validateFormData', () => {
+    const fullReport = `═══ تقرير ═══\nالتاريخ: 29-08-2026\nالفترة: تجويد\nعدد الطلاب: 8\n━━━\nمتن التقرير.`;
+
+    _section('بيانات كاملة صالحة');
+    const rawOk = {
+      rawTeacherName: 'محمد نبيل', rawStudentCategory: 'كبار',
+      rawHours: '1', rawMinutes: '30',
+      rawReportText: fullReport, rawAdminNotes: 'ملاحظة.',
+      bodyMetadata: parseReportMetadata(fullReport),
+      submissionTimestamp: '2026-08-29T14:00:00Z',
+    };
+    const v1 = validateFormData(rawOk, 'uuid-1', new Date(2026, 7, 29));
+    _eq(v1.validationStatus,  'VALID',      'all valid → VALID');
+    _eq(v1.teacherName,       'محمد نبيل', 'teacher resolved');
+    _eq(v1.teacherId,         'T001',       'teacher ID');
+    _eq(v1.durationTime,      '01:30',      'duration time');
+    _eq(v1.sessionType,       'تجويد',      'session from metadata');
+    _eq(v1.studentCount,      8,            'student count from metadata');
+    _eq(v1.submissionYear,    '2026',       'year');
+    _ok(v1.missingFields.length === 0,      'no missing fields');
+
+    _section('بيانات مفقودة كلياً');
+    const rawEmpty = {
+      rawTeacherName: '', rawStudentCategory: '', rawHours: '', rawMinutes: '',
+      rawReportText: '', rawAdminNotes: '',
+      bodyMetadata: { dateText: '', sessionTypeText: '', studentCountText: '' },
+      submissionTimestamp: '2026-08-29T14:00:00Z',
+    };
+    const v2 = validateFormData(rawEmpty, 'uuid-2', new Date(2026, 7, 29));
+    _eq(v2.validationStatus, 'MISSING DATA',            'empty → MISSING DATA');
+    _ok(v2.missingFields.length > 0,                    'missingFields populated');
+    _eq(v2.teacherName,   CONFIG.FALLBACKS.TEACHER_NAME, 'fallback teacher name');
+    _eq(v2.reportText,    CONFIG.FALLBACKS.REPORT_TEXT,  'fallback report text');
+
+    _section('بيانات صالحة بأرقام عربية');
+    const rawArabic = { ...rawOk, rawHours: '١', rawMinutes: '٣٠' };
+    const v3 = validateFormData(rawArabic, 'uuid-3', new Date(2026, 7, 29));
+    _eq(v3.durationTime, '01:30', 'eastern arabic digits normalized in validateFormData');
+
+    _section('معلم غير مُدرج في CONFIG');
+    const rawUnknown = { ...rawOk, rawTeacherName: 'معلم جديد' };
+    const v4 = validateFormData(rawUnknown, 'uuid-4', new Date(2026, 7, 29));
+    _eq(v4.teacherName,              'معلم جديد', 'unknown teacher name kept');
+    _ok(v4.teacherId.startsWith('T_'), 'unknown teacher dynamic ID');
+    _eq(v4.validationStatus,         'VALID',     'unknown teacher is not a validation error');
+  });
+}
+
+// ─── generateMarkdownContent ─────────────────────────────────────────────────
+function _testGenerateMarkdown() {
+  _suite('generateMarkdownContent', () => {
+    const data = {
+      executionId: 'test-uuid', submissionTimestamp: '2026-08-29T14:00:00Z',
+      teacherName: 'محمد نبيل', teacherId: 'T001',
+      sessionType: 'تجويد', sessionId: 'TAJWEED',
+      studentCategory: 'كبار',
+      reportDateText: '29-08-2026', submissionDateFormatted: '29-08-2026',
+      durationHours: 1, durationMinutes: 30,
+      durationTime: '01:30', durationFormatted: '1 ساعة و30 دقيقة',
+      studentCount: 8,
+      validationStatus: 'VALID', missingFields: [], validationErrors: [],
+      reportText: 'نص التقرير التجريبي الكامل.',
+      adminNotes: 'ملاحظة إدارية.',
+    };
+    const md = generateMarkdownContent(data);
+
+    _has(md, '---',                         'YAML frontmatter delimiters');
+    _has(md, 'teacher_name: "محمد نبيل"',   'teacher_name in frontmatter');
+    _has(md, 'session_type: "تجويد"',       'session_type in frontmatter');
+    _has(md, 'duration_time: "01:30"',      'duration_time in frontmatter');
+    _has(md, 'student_count: 8',            'student_count in frontmatter');
+    _has(md, 'validation_status: "VALID"',  'validation_status in frontmatter');
+    _has(md, '# تقرير حلقة:',              'H1 title present');
+    _has(md, 'نص التقرير التجريبي',         'report body present');
+    _has(md, 'ملاحظة إدارية',              'admin notes present');
+    _ok(!md.includes('undefined'),          'no raw "undefined" strings in output');
+    _ok(!md.includes('"null"'),             'no raw "null" strings in output');
+  });
+}
+
+// ============================================================================
+// ③ تشغيل جميع اختبارات الوحدة
+// ============================================================================
+
+/**
+ * يشغّل جميع اختبارات الوحدة (لا يتصل بـ Drive/Sheets).
+ * الوقت المتوقع: 2–4 ثوانٍ.
+ */
+function runAllUnitTests() {
+  _T = { pass: 0, fail: 0, log: [] };
+
+  _testNormalize();
+  _testParseMetadata();
+  _testGetFieldCI();
+  _testFormatArabicHours();
+  _testSanitize();
+  _testEscapeHtml();
+  _testFormatDate();
+  _testResolveTeacher();
+  _testParseDuration();
+  _testResolveSession();
+  _testValidate();
+  _testGenerateMarkdown();
+
+  _report('UNIT TESTS');
+}
+
+// ============================================================================
+// ④ اختبارات التكامل (Integration Tests)
+// ============================================================================
+
+/**
+ * اختبار تكاملي — تقرير كامل صالح مع بيانات حقيقية.
+ * يُنشئ ملف Markdown وصف في Sheets ويرسل إشعار Telegram.
+ */
+function integrationTest_NormalSubmission() {
+  const report = `بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ
+═══ [ تقرير أكاديمية سنا ] ═══
+التاريخ: 29-08-2026
 الفترة: تجويد
-عدد الطلاب: 6
+عدد الطلاب: 8
 ━━━━━━━━━━━━━━━
-تقرير مكرر لاختبار حفظ النسخ المكررة والترقيم التسلسلي وتدوين الشيت.`;
+تم شرح أحكام النون الساكنة مع التطبيق.`;
 
-  const mockEvent = {
+  console.log('[INTEGRATION] testNormalSubmission starting...');
+  onFormSubmit({
     mockData: {
-      'اسم المعلم': 'محمد نبيل',
-      'فئة الطلاب': 'كبار',
-      'الساعات': '1',
-      'الدقائق': '30',
-      'التقرير': sampleReport,
-      'ملاحظات خاصة للإدارة': '',
+      'اسم المعلم':              'محمد نبيل',
+      'فئة الطلاب':              'كبار',
+      'الساعات':                 '1',
+      'الدقائق':                 '30',
+      'التقرير':                 report,
+      'ملاحظات خاصة للإدارة':   'اختبار تكاملي — تقرير عادي.',
     },
-  };
-
-  console.log('Running test: testDuplicateSubmission');
-  onFormSubmit(mockEvent);
-  console.log('Completed test: testDuplicateSubmission');
+  });
+  console.log('[INTEGRATION] testNormalSubmission completed.');
 }
 
 /**
- * Direct Telegram Bot Notification Test
+ * اختبار تكاملي — تقرير مكرر: يتحقق من الترقيم التسلسلي (1) في اسم الملف.
+ * شغّله بعد integrationTest_NormalSubmission مباشرةً لضمان وجود الملف الأول.
  */
-function testTelegramOnly() {
-  testTelegramConnection();
+function integrationTest_DuplicateDetection() {
+  const report = `═══ [ تقرير أكاديمية سنا ] ═══
+التاريخ: 29-08-2026
+الفترة: تجويد
+عدد الطلاب: 8
+━━━━━━━━━━━━━━━
+تقرير مكرر لاختبار الترقيم التسلسلي.`;
+
+  console.log('[INTEGRATION] testDuplicateDetection starting...');
+  onFormSubmit({
+    mockData: {
+      'اسم المعلم':            'محمد نبيل',
+      'فئة الطلاب':            'كبار',
+      'الساعات':               '1',
+      'الدقائق':               '30',
+      'التقرير':               report,
+      'ملاحظات خاصة للإدارة': '',
+    },
+  });
+  console.log('[INTEGRATION] testDuplicateDetection completed. Verify "(1)" suffix in Drive.');
+}
+
+/**
+ * اختبار تكاملي — أرقام عربية شرقية في حقول الساعات والدقائق.
+ * يتحقق أن النظام يُحوّلها ولا يرفضها.
+ */
+function integrationTest_EasternArabicDigits() {
+  const report = `═══ [ تقرير أكاديمية سنا ] ═══
+التاريخ: 29-08-2026
+الفترة: مسائية
+عدد الطلاب: ٢٠
+━━━━━━━━━━━━━━━
+تقرير بأرقام عربية شرقية.`;
+
+  console.log('[INTEGRATION] testEasternArabicDigits starting...');
+  onFormSubmit({
+    mockData: {
+      'اسم المعلم':            'أسماء علي',
+      'فئة الطلاب':            'كبار',
+      'الساعات':               '٢',
+      'الدقائق':               '١٥',
+      'التقرير':               report,
+      'ملاحظات خاصة للإدارة': 'اختبار أرقام عربية شرقية.',
+    },
+  });
+  console.log('[INTEGRATION] testEasternArabicDigits completed. Verify 02:15 in Sheet.');
+}
+
+/**
+ * اختبار تكاملي — بيانات مفقودة: يتحقق أن النظام يستمر بالقيم الاحتياطية.
+ * يجب أن ينتهي بنجاح مع validationStatus = MISSING DATA.
+ */
+function integrationTest_MissingFields() {
+  console.log('[INTEGRATION] testMissingFields starting...');
+  onFormSubmit({
+    mockData: {
+      'اسم المعلم':            '',
+      'فئة الطلاب':            '',
+      'الساعات':               '',
+      'الدقائق':               '',
+      'التقرير':               '',
+      'ملاحظات خاصة للإدارة': '',
+    },
+  });
+  console.log('[INTEGRATION] testMissingFields completed. Verify fallback values in Drive.');
+}
+
+/**
+ * اختبار تكاملي — معلم غير مُدرج في CONFIG.
+ * يتحقق أن النظام يقبله ويُنشئ ID ديناميكياً.
+ */
+function integrationTest_UnknownTeacher() {
+  const report = `═══ [ تقرير أكاديمية سنا ] ═══
+التاريخ: 29-08-2026
+الفترة: صباحية
+عدد الطلاب: 5
+━━━━━━━━━━━━━━━
+تقرير معلم جديد غير مُدرج في CONFIG.`;
+
+  console.log('[INTEGRATION] testUnknownTeacher starting...');
+  onFormSubmit({
+    mockData: {
+      'اسم المعلم':            'معلم جديد',
+      'فئة الطلاب':            'أطفال',
+      'الساعات':               '1',
+      'الدقائق':               '0',
+      'التقرير':               report,
+      'ملاحظات خاصة للإدارة': 'اختبار معلم غير مُدرج.',
+    },
+  });
+  console.log('[INTEGRATION] testUnknownTeacher completed. Verify T_ prefix in markdown frontmatter.');
+}
+
+// ============================================================================
+// ⑤ المُشغِّل الكامل
+// ============================================================================
+
+/**
+ * يشغّل الجناحين: اختبارات الوحدة أولاً ثم اختبارات التكامل.
+ * الوقت المتوقع: 40–60 ثانية (حسب سرعة Drive/Sheets).
+ */
+function runAllTests() {
+  _T = { pass: 0, fail: 0, log: [] };
+
+  // جناح الوحدة
+  _testNormalize();
+  _testParseMetadata();
+  _testGetFieldCI();
+  _testFormatArabicHours();
+  _testSanitize();
+  _testEscapeHtml();
+  _testFormatDate();
+  _testResolveTeacher();
+  _testParseDuration();
+  _testResolveSession();
+  _testValidate();
+  _testGenerateMarkdown();
+
+  const unitPass = _T.pass;
+  const unitFail = _T.fail;
+  _report('UNIT TESTS');
+
+  // جناح التكامل
+  _T = { pass: 0, fail: 0, log: [] };
+  _suite('Integration: NormalSubmission',    integrationTest_NormalSubmission);
+  _suite('Integration: DuplicateDetection',  integrationTest_DuplicateDetection);
+  _suite('Integration: EasternArabicDigits', integrationTest_EasternArabicDigits);
+  _suite('Integration: MissingFields',       integrationTest_MissingFields);
+  _suite('Integration: UnknownTeacher',      integrationTest_UnknownTeacher);
+
+  console.log(`\nSUMMARY — Unit: ${unitPass}P/${unitFail}F | Integration: ${_T.pass}P/${_T.fail}F`);
 }
