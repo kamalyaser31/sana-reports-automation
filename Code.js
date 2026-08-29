@@ -103,7 +103,13 @@ const CONFIG = {
       return PropertiesService.getScriptProperties().getProperty('TELEGRAM_BOT_TOKEN') || '8865369925:AAGuMdA4TjKu-D8mU1heLVDqQwn2nOygQFg';
     },
     get CHAT_ID() {
-      return PropertiesService.getScriptProperties().getProperty('TELEGRAM_CHAT_ID') || '-5179038072';
+      const raw = PropertiesService.getScriptProperties().getProperty('TELEGRAM_CHAT_ID') || '-1005179038072';
+      const trimmed = String(raw).trim();
+      // Auto-prefix supergroups missing -100 (e.g. -5179038072 -> -1005179038072)
+      if (trimmed.startsWith('-') && !trimmed.startsWith('-100') && trimmed.length > 8) {
+        return '-100' + trimmed.substring(1);
+      }
+      return trimmed;
     },
   },
 
@@ -1027,21 +1033,35 @@ function sendTelegramNotification(data) {
   if (!CONFIG.TELEGRAM.ENABLED) return;
 
   const botToken = CONFIG.TELEGRAM.BOT_TOKEN;
-  const chatId = CONFIG.TELEGRAM.CHAT_ID;
+  let chatId = CONFIG.TELEGRAM.CHAT_ID;
 
   if (!botToken || !chatId) {
     console.warn('[TELEGRAM WARNING] Bot token or Chat ID is missing. Notification skipped.');
     return;
   }
 
+  // Ensure supergroup ID has -100 prefix if 10 digits
+  if (chatId.startsWith('-') && !chatId.startsWith('-100') && chatId.length > 8) {
+    chatId = '-100' + chatId.substring(1);
+  }
+
   const messageLines = [
     '📖 <b>تقرير حلقة جديد — أكاديمية سنا</b>',
     '',
-    `• <b>المعلم:</b> ${escapeHtml(data.teacherName)}`,
-    `• <b>تاريخ التقرير:</b> ${escapeHtml(data.reportDateText || data.submissionDateFormatted)}`,
-    `• <b>مدة الحصة:</b> ${escapeHtml(data.durationFormatted)} (<code>${escapeHtml(data.durationTime)}</code>)`,
-    `• <b>رابط التقرير:</b> <a href="${data.fileUrl || '#'}">فتح الملف في Google Drive</a>`,
+    `• <b>المعلم:</b> ${escapeHtml(data.teacherName || 'غير محدد')}`,
+    `• <b>الفترة / النوع:</b> ${escapeHtml(data.sessionTypeName || data.sessionType || 'غير محدد')}`,
+    `• <b>تاريخ التقرير:</b> ${escapeHtml(data.reportDateText || data.submissionDateFormatted || 'غير محدد')}`,
+    `• <b>مدة الحصة:</b> ${escapeHtml(data.durationFormatted || 'غير محدد')} (<code>${escapeHtml(data.durationTime || '00:00')}</code>)`,
+    `• <b>عدد الطلاب:</b> ${escapeHtml(String(data.studentCount || 0))}`,
   ];
+
+  if (data.fileUrl) {
+    messageLines.push(`• <b>رابط التقرير:</b> <a href="${data.fileUrl}">فتح الملف في Google Drive</a>`);
+  }
+
+  if (data.adminNotes && data.adminNotes !== 'لا توجد ملاحظات إدارية.' && data.adminNotes.trim() !== '') {
+    messageLines.push(`• <b>ملاحظات الإدارة:</b> ${escapeHtml(data.adminNotes)}`);
+  }
 
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   const payload = {
@@ -1060,11 +1080,62 @@ function sendTelegramNotification(data) {
 
   const response = UrlFetchApp.fetch(url, options);
   const resCode = response.getResponseCode();
+  const resText = response.getContentText();
+
   if (resCode !== 200) {
-    console.warn(`[TELEGRAM ERROR] API returned status ${resCode}: ${response.getContentText()}`);
+    console.warn(`[TELEGRAM ERROR] API returned status ${resCode} for chat ${chatId}: ${resText}`);
+    // If chat not found and ID was negative without -100, retry with -100
+    if (resCode === 400 && !chatId.startsWith('-100')) {
+      const fallbackChatId = '-100' + chatId.replace(/^-/, '');
+      console.log(`[TELEGRAM RETRY] Retrying with supergroup ID: ${fallbackChatId}`);
+      payload.chat_id = fallbackChatId;
+      options.payload = JSON.stringify(payload);
+      const retryRes = UrlFetchApp.fetch(url, options);
+      if (retryRes.getResponseCode() === 200) {
+        console.log('[TELEGRAM SUCCESS] Notification delivered on retry with supergroup ID.');
+        return;
+      }
+    }
   } else {
     console.log('[TELEGRAM SUCCESS] Notification delivered successfully.');
   }
+}
+
+/**
+ * Diagnostic function to test Telegram Bot API directly from the Apps Script editor.
+ * Run this function from the Apps Script toolbar to verify Telegram notifications.
+ */
+function testTelegramConnection() {
+  const botToken = CONFIG.TELEGRAM.BOT_TOKEN;
+  let chatId = CONFIG.TELEGRAM.CHAT_ID;
+
+  console.log('[TELEGRAM DIAGNOSTIC] Starting Telegram connection test...');
+  console.log(`[TELEGRAM DIAGNOSTIC] Bot Token Prefix: ${botToken ? botToken.substring(0, 10) + '...' : 'MISSING'}`);
+  console.log(`[TELEGRAM DIAGNOSTIC] Target Chat ID: ${chatId}`);
+
+  // 1. Verify Bot via getMe
+  const meUrl = `https://api.telegram.org/bot${botToken}/getMe`;
+  const meRes = UrlFetchApp.fetch(meUrl, { muteHttpExceptions: true });
+  console.log(`[TELEGRAM DIAGNOSTIC] getMe status: ${meRes.getResponseCode()}, response: ${meRes.getContentText()}`);
+
+  if (meRes.getResponseCode() !== 200) {
+    throw new Error(`Telegram Bot Token is invalid or blocked! Response: ${meRes.getContentText()}`);
+  }
+
+  // 2. Test Sending Message
+  const testData = {
+    teacherName: 'محمد نبيل (اختبار)',
+    sessionTypeName: 'صباحية',
+    reportDateText: '29-08-2026',
+    durationFormatted: '1 ساعة',
+    durationTime: '01:00',
+    studentCount: 5,
+    fileUrl: 'https://drive.google.com',
+    adminNotes: 'رسالة اختبارية للتأكد من ربط بوت تيليجرام بنجاح.',
+  };
+
+  sendTelegramNotification(testData);
+  console.log('[TELEGRAM DIAGNOSTIC] Test completed. Check your Telegram group/channel now!');
 }
 
 /**

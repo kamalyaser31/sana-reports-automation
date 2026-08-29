@@ -102,3 +102,10 @@ function testDuplicateSubmission() {
   onFormSubmit(mockEvent);
   console.log('Completed test: testDuplicateSubmission');
 }
+
+/**
+ * Direct Telegram Bot Notification Test
+ */
+function testTelegramOnly() {
+  testTelegramConnection();
+}
