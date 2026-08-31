@@ -1,5 +1,8 @@
 # Changelog
 
+## [5.1.1] — 2026-08-31
+- feat(teachers): أُضيفت المعلمة «فاطمة إبراهيم» بالمعرّف `T003` إلى سجل `CONFIG.TEACHERS`.
+
 ## [5.1.0] — 2026-08-29
 
 ### test: complete test suite rewrite & v5.1 idiomatic polish
