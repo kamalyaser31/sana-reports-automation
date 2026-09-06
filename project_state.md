@@ -2,6 +2,7 @@
 
 **الإصدار:** `5.1.2`  
 **تاريخ التحديث:** `2026-09-06`  
+**المستودع:** `https://github.com/kamalyaser31/sana-reports-automation` (خاص - Private)  
 **الحالة:** أُضيفت المعلمات الجدد (T004, T005, T006, T007) إلى سجل المعلمين في Code.js ونُشرت بنجاح على Google Apps Script عبر `clasp push`.
 
 ---
