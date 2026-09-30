@@ -39,15 +39,25 @@ function _getSecret(key) {
 // ============================================================================
 // 2. CONFIGURATION
 // ============================================================================
+/**
+ * Set to true only by Test.js integration runs: routes all Drive writes to
+ * TEST_ROOT_FOLDER_ID and skips Telegram, so tests never touch production data.
+ */
+let _TEST_MODE = false;
+
 const CONFIG = {
-  get ROOT_FOLDER_ID() { return _getSecret('ROOT_FOLDER_ID') || ''; },
+  get ROOT_FOLDER_ID() {
+    return _TEST_MODE ? _getSecret('TEST_ROOT_FOLDER_ID') : (_getSecret('ROOT_FOLDER_ID') || '');
+  },
 
   ROOT_FOLDER_NAME:          'تقرير حلقات أكاديمية سنا',
   ERROR_LOG_FILENAME_PREFIX: 'automation_errors',
 
   get ALERT_EMAIL() { return _getSecret('ALERT_EMAIL'); },
 
-  LOCK_TIMEOUT_MS: 30000,
+  // Apps Script caps a run at 6 min; waiting up to 4 min lets a burst of
+  // simultaneous submissions queue up instead of being dropped.
+  LOCK_TIMEOUT_MS: 240000,
 
   RETRY: {
     MAX_ATTEMPTS:       3,
@@ -135,22 +145,18 @@ function onFormSubmit(e) {
   try {
     hasLock = lock.tryLock(CONFIG.LOCK_TIMEOUT_MS);
     if (!hasLock) {
-      throw new Error(`Could not obtain script lock within ${CONFIG.LOCK_TIMEOUT_MS}ms. Submission queued or throttled.`);
+      throw new Error(`Could not obtain script lock within ${CONFIG.LOCK_TIMEOUT_MS}ms. The submission was NOT processed.`);
     }
 
-    withRetry(
-      () => executeSubmissionPipeline(e, executionId, startTime),
-      CONFIG.RETRY.MAX_ATTEMPTS,
-      CONFIG.RETRY.INITIAL_DELAY_MS,
-      CONFIG.RETRY.BACKOFF_MULTIPLIER
-    );
+    executeSubmissionPipeline(e, executionId, startTime);
 
   } catch (error) {
     const errorDetails = {
       executionId,
-      timestamp: startTime.toISOString(),
-      error:     error.message,
-      stack:     error.stack || 'No stack trace available',
+      timestamp:   startTime.toISOString(),
+      error:       error.message,
+      stack:       error.stack || 'No stack trace available',
+      teacherName: _peekTeacherName(e),
     };
     console.error(`[FATAL ERROR] [ExecutionID: ${executionId}]`, error.message, error.stack);
 
@@ -177,14 +183,21 @@ function onFormSubmit(e) {
  * @param {Object} e           - Form submit event object.
  * @param {string} executionId - Unique UUID for this run.
  * @param {Date}   startTime   - Execution start timestamp.
+ * @returns {Object} The validated data, including fileUrl and duplicate info.
  */
 function executeSubmissionPipeline(e, executionId, startTime) {
   const rawData         = extractFormData(e);
   const validatedData   = validateFormData(rawData, executionId, startTime);
-  const driveTarget     = resolveTargetFolder(validatedData);
   const markdownContent = generateMarkdownContent(validatedData);
 
-  const saveResult = saveMarkdownFile(driveTarget.monthFolder, validatedData, markdownContent);
+  // Only the Drive save is retried: it has no side effects until createFile succeeds,
+  // so a retry can never produce a second copy of the same report.
+  const { driveTarget, saveResult } = withRetry(
+    () => _saveReportToDrive(validatedData, markdownContent),
+    CONFIG.RETRY.MAX_ATTEMPTS,
+    CONFIG.RETRY.INITIAL_DELAY_MS,
+    CONFIG.RETRY.BACKOFF_MULTIPLIER
+  );
   validatedData.fileUrl        = saveResult.file.getUrl();
   validatedData.isDuplicate    = saveResult.isDuplicate;
   validatedData.duplicateIndex = saveResult.duplicateIndex;
@@ -192,17 +205,11 @@ function executeSubmissionPipeline(e, executionId, startTime) {
   verifySavedFile(saveResult.file);
 
   // Sheets failure is non-fatal: the Markdown file is already saved.
-  // Log to Drive so the failure is not silently discarded.
   try {
     recordToTeacherSheet(driveTarget.yearTeacherFolder, validatedData);
   } catch (sheetError) {
     console.error(`[SHEET WARNING] [ExecutionID: ${executionId}] Could not append to teacher sheet:`, sheetError.message);
-    appendErrorToDriveLog({
-      executionId,
-      timestamp: startTime.toISOString(),
-      error:     `Google Sheets Warning: ${sheetError.message}`,
-      stack:     sheetError.stack || 'No stack trace',
-    });
+    _safeLogToDrive(executionId, startTime, `Google Sheets Warning: ${sheetError.message}`, sheetError.stack);
   }
 
   // Telegram is non-fatal: log failures to Drive so they are not silently lost.
@@ -210,15 +217,57 @@ function executeSubmissionPipeline(e, executionId, startTime) {
     sendTelegramNotification(validatedData);
   } catch (telegramError) {
     console.warn(`[TELEGRAM WARNING] [ExecutionID: ${executionId}]`, telegramError.message);
-    appendErrorToDriveLog({
-      executionId,
-      timestamp: startTime.toISOString(),
-      error:     `Telegram Notification Failed: ${telegramError.message}`,
-      stack:     telegramError.stack || 'No stack trace',
-    });
+    _safeLogToDrive(executionId, startTime, `Telegram Notification Failed: ${telegramError.message}`, telegramError.stack);
   }
 
   console.log(`[PIPELINE SUCCESS] [ExecutionID: ${executionId}] Saved: ${saveResult.file.getName()} in ${driveTarget.monthFolder.getName()}`);
+  return validatedData;
+}
+
+/**
+ * Resolves the Drive folders and saves the Markdown file (the retryable unit).
+ * @param {Object} data
+ * @param {string} content
+ * @returns {{ driveTarget: Object, saveResult: Object }}
+ */
+function _saveReportToDrive(data, content) {
+  const driveTarget = resolveTargetFolder(data);
+  const saveResult  = saveMarkdownFile(driveTarget.monthFolder, data, content);
+  return { driveTarget, saveResult };
+}
+
+/**
+ * Writes a non-fatal warning to the Drive log without ever throwing,
+ * so a logging failure cannot abort a pipeline whose report is already saved.
+ * @param {string} executionId
+ * @param {Date}   startTime
+ * @param {string} message
+ * @param {string} [stack]
+ */
+function _safeLogToDrive(executionId, startTime, message, stack) {
+  try {
+    appendErrorToDriveLog({
+      executionId,
+      timestamp: startTime.toISOString(),
+      error:     message,
+      stack:     stack || 'No stack trace',
+    });
+  } catch (logError) {
+    console.error('[LOGGER FAILURE] Failed to write Drive log:', logError.message);
+  }
+}
+
+/**
+ * Best-effort read of the teacher name from a raw event, for fatal-error alerts.
+ * @param {Object} e
+ * @returns {string}
+ */
+function _peekTeacherName(e) {
+  try {
+    return extractFormData(e).rawTeacherName || CONFIG.FALLBACKS.TEACHER_NAME;
+  } catch (peekError) {
+    return CONFIG.FALLBACKS.TEACHER_NAME;
+  }
 }
 
 // ============================================================================
@@ -301,19 +350,55 @@ function normalizeDigitsAndText(str) {
  */
 function parseReportMetadata(text) {
   if (!text || typeof text !== 'string') {
-    return { dateText: '', sessionTypeText: '', studentCountText: '' };
+    return { dateText: '', sessionTypeText: '', studentCountText: '', halaNumText: '' };
   }
 
   const cleanText    = text.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, ' ');
   const dateMatch    = cleanText.match(/التاريخ\s*[:：]\s*([^\n\r]+)/);
   const sessionMatch = cleanText.match(/(?:الفترة|نوع الحلقة)\s*[:：]\s*([^\n\r]+)/);
   const countMatch   = cleanText.match(/عدد الطلاب\s*[:：]\s*([^\n\r]+)/);
+  const halaNumMatch = cleanText.match(/رقم الحلقة\s*[:：]\s*([^\n\r]+)/);
 
   return {
     dateText:         (dateMatch    && dateMatch[1])    ? dateMatch[1].trim()    : '',
     sessionTypeText:  (sessionMatch && sessionMatch[1]) ? sessionMatch[1].trim() : '',
     studentCountText: (countMatch   && countMatch[1])   ? countMatch[1].trim()   : '',
+    halaNumText:      (halaNumMatch && halaNumMatch[1]) ? halaNumMatch[1].trim() : '',
   };
+}
+
+/** Arabic month names as produced by toLocaleDateString('ar-EG') in the report app. */
+const ARABIC_MONTH_NAMES = [
+  'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+  'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر',
+];
+
+/**
+ * Parses the report's own date text into a Date, so the report is filed under
+ * the month it belongs to rather than the month it happened to be submitted in.
+ * Supports "الأربعاء، ٣٠ سبتمبر ٢٠٢٦" (report app) and "30-09-2026" / "30/09/2026".
+ * @param {string} dateText
+ * @returns {Date|null} null when the text cannot be parsed into a real calendar date.
+ */
+function _parseReportDate(dateText) {
+  if (!dateText) return null;
+  const text = normalizeDigitsAndText(dateText).replace(/[\u200E\u200F\u061C]/g, '');
+
+  let day, monthIndex, year;
+  const numeric = text.match(/(\d{1,2})\s*[-\/.]\s*(\d{1,2})\s*[-\/.]\s*(\d{4})/);
+  const named   = text.match(/(\d{1,2})\s+([^\s\d،,]+)\s+(\d{4})/);
+
+  if (numeric) {
+    day = parseInt(numeric[1], 10); monthIndex = parseInt(numeric[2], 10) - 1; year = parseInt(numeric[3], 10);
+  } else if (named && ARABIC_MONTH_NAMES.indexOf(named[2]) !== -1) {
+    day = parseInt(named[1], 10); monthIndex = ARABIC_MONTH_NAMES.indexOf(named[2]); year = parseInt(named[3], 10);
+  } else {
+    return null;
+  }
+
+  const date = new Date(year, monthIndex, day);
+  const isRealDate = date.getFullYear() === year && date.getMonth() === monthIndex && date.getDate() === day;
+  return isRealDate ? date : null;
 }
 
 /**
@@ -376,6 +461,17 @@ function _resolveTeacher(raw, missingFields) {
 }
 
 /**
+ * Parses a non-negative whole number (Eastern or Western digits).
+ * Rejects anything else — "1.5" or "1:30" must be flagged, not silently read as 15 / 130.
+ * @param {string|number} value
+ * @returns {number|null}
+ */
+function _parseWholeNumber(value) {
+  const clean = normalizeDigitsAndText(value).trim();
+  return /^\d+$/.test(clean) ? parseInt(clean, 10) : null;
+}
+
+/**
  * Parses hours and minutes from raw form input and computes formatted duration strings.
  * @param {Object}   raw              - Raw form data.
  * @param {string[]} missingFields    - Accumulates missing field names.
@@ -387,9 +483,8 @@ function _parseDuration(raw, missingFields, validationErrors) {
   let minutes = 0;
 
   if (raw.rawHours !== null && raw.rawHours !== undefined && String(raw.rawHours).trim().length > 0) {
-    const cleanH  = normalizeDigitsAndText(raw.rawHours).replace(/[^\d]/g, '');
-    const parsedH = parseInt(cleanH, 10);
-    if (!isNaN(parsedH) && parsedH >= 0) {
+    const parsedH = _parseWholeNumber(raw.rawHours);
+    if (parsedH !== null) {
       hours = parsedH;
     } else {
       validationErrors.push(`Invalid hours value: ${raw.rawHours}`);
@@ -399,11 +494,10 @@ function _parseDuration(raw, missingFields, validationErrors) {
   }
 
   if (raw.rawMinutes !== null && raw.rawMinutes !== undefined && String(raw.rawMinutes).trim().length > 0) {
-    const cleanM  = normalizeDigitsAndText(raw.rawMinutes).replace(/[^\d]/g, '');
-    const parsedM = parseInt(cleanM, 10);
-    if (!isNaN(parsedM) && parsedM >= 0 && parsedM <= 59) {
+    const parsedM = _parseWholeNumber(raw.rawMinutes);
+    if (parsedM !== null && parsedM <= 59) {
       minutes = parsedM;
-    } else if (!isNaN(parsedM) && parsedM > 59) {
+    } else if (parsedM !== null) {
       // Overflow: convert excess minutes into hours.
       minutes  = parsedM % 60;
       hours   += Math.floor(parsedM / 60);
@@ -463,7 +557,12 @@ function _resolveSessionAndDate(raw, missingFields) {
   }
   if (studentCount === null) missingFields.push('عدد الطلاب (من التقرير)');
 
-  return { sessionType, sessionId, reportDateText, studentCount };
+  // Optional: distinguishes several halaqat of the same session type on the same day.
+  const halaNum = (raw.bodyMetadata && raw.bodyMetadata.halaNumText)
+    ? normalizeDigitsAndText(raw.bodyMetadata.halaNumText).trim()
+    : '';
+
+  return { sessionType, sessionId, reportDateText, studentCount, halaNum };
 }
 
 /**
@@ -499,7 +598,9 @@ function validateFormData(raw, executionId, startTime) {
   const teacher      = _resolveTeacher(raw, missingFields);
   const duration     = _parseDuration(raw, missingFields, validationErrors);
   const sessionDate  = _resolveSessionAndDate(raw, missingFields);
-  const subDate      = _formatSubmissionDate(startTime);
+  // Route by the report's own date (e.g. a late "yesterday" report sent on the 1st);
+  // fall back to the submission time only when the date text cannot be parsed.
+  const subDate      = _formatSubmissionDate(_parseReportDate(sessionDate.reportDateText) || startTime);
 
   let studentCategory;
   if (raw.rawStudentCategory && raw.rawStudentCategory.trim().length > 0) {
@@ -536,6 +637,7 @@ function validateFormData(raw, executionId, startTime) {
     durationFormatted: duration.durationFormatted,
     sessionType:      sessionDate.sessionType,
     sessionId:        sessionDate.sessionId,
+    halaNum:          sessionDate.halaNum,
     reportDateText:   sessionDate.reportDateText,
     studentCount:     sessionDate.studentCount,
     reportText,
@@ -584,6 +686,11 @@ function resolveTargetFolder(data) {
  */
 function getRootFolder() {
   const rootId = CONFIG.ROOT_FOLDER_ID;
+  if (_TEST_MODE) {
+    // Never fall back to the production folder search while testing.
+    if (!rootId) throw new Error('TEST_ROOT_FOLDER_ID is not set — refusing to run integration tests against production.');
+    return DriveApp.getFolderById(rootId.trim());
+  }
   if (rootId && rootId.trim().length > 0) {
     try {
       return DriveApp.getFolderById(rootId.trim());
@@ -592,10 +699,8 @@ function getRootFolder() {
     }
   }
 
-  const searchResults = DriveApp.getFoldersByName(CONFIG.ROOT_FOLDER_NAME);
-  if (searchResults.hasNext()) return searchResults.next();
-
-  return DriveApp.createFolder(CONFIG.ROOT_FOLDER_NAME);
+  return _firstNotTrashed(DriveApp.getFoldersByName(CONFIG.ROOT_FOLDER_NAME))
+    || DriveApp.createFolder(CONFIG.ROOT_FOLDER_NAME);
 }
 
 /**
@@ -606,14 +711,36 @@ function getRootFolder() {
  */
 function getOrCreateChildFolder(parentFolder, childName) {
   const sanitizedName = sanitizeFilename(childName);
-  const children = parentFolder.getFoldersByName(sanitizedName);
-  if (children.hasNext()) return children.next();
-  return parentFolder.createFolder(sanitizedName);
+  return _firstNotTrashed(parentFolder.getFoldersByName(sanitizedName))
+    || parentFolder.createFolder(sanitizedName);
+}
+
+/**
+ * Returns the first non-trashed item of a DriveApp iterator.
+ * DriveApp name lookups also return items in the trash, which must be ignored.
+ * @param {GoogleAppsScript.Drive.FileIterator|GoogleAppsScript.Drive.FolderIterator} iterator
+ * @returns {GoogleAppsScript.Drive.File|GoogleAppsScript.Drive.Folder|null}
+ */
+function _firstNotTrashed(iterator) {
+  while (iterator.hasNext()) {
+    const item = iterator.next();
+    if (!item.isTrashed()) return item;
+  }
+  return null;
 }
 
 // ============================================================================
 // 9. MARKDOWN GENERATION
 // ============================================================================
+
+/**
+ * Session type with the halaqa number when present, e.g. "صباحية (حلقة 2)".
+ * @param {Object} data
+ * @returns {string}
+ */
+function _sessionLabel(data) {
+  return data.halaNum ? `${data.sessionType} (حلقة ${data.halaNum})` : data.sessionType;
+}
 
 /**
  * Generates structured Markdown text with YAML frontmatter and report body.
@@ -629,6 +756,7 @@ function generateMarkdownContent(data) {
     `teacher_id: ${JSON.stringify(data.teacherId)}`,
     `session_type: ${JSON.stringify(data.sessionType)}`,
     `session_id: ${JSON.stringify(data.sessionId)}`,
+    `hala_num: ${JSON.stringify(data.halaNum || '')}`,
     `student_category: ${JSON.stringify(data.studentCategory)}`,
     `report_date_text: ${JSON.stringify(data.reportDateText || data.submissionDateFormatted)}`,
     `duration_hours: ${data.durationHours}`,
@@ -645,7 +773,7 @@ function generateMarkdownContent(data) {
     `# تقرير حلقة: ${data.sessionType} — ${data.teacherName}`,
     '',
     `- **اسم المعلم:** ${data.teacherName} (\`${data.teacherId}\`)`,
-    `- **نوع الحلقة:** ${data.sessionType} (\`${data.sessionId}\`)`,
+    `- **نوع الحلقة:** ${_sessionLabel(data)} (\`${data.sessionId}\`)`,
     `- **فئة الطلاب:** ${data.studentCategory}`,
     `- **تاريخ التقرير:** ${data.reportDateText || data.submissionDateFormatted}`,
     `- **مدة الحصة:** ${data.durationFormatted} (\`${data.durationTime}\`)`,
@@ -682,11 +810,13 @@ function generateMarkdownContent(data) {
  * @returns {{ file: GoogleAppsScript.Drive.File, isDuplicate: boolean, duplicateIndex: number }}
  */
 function saveMarkdownFile(monthFolder, data, content) {
-  const baseName = sanitizeFilename(`${data.submissionDateFormatted}_${data.sessionType}_${data.teacherName}`);
+  // Include the halaqa number so two halaqat of the same type on the same day are not "duplicates".
+  const halaPart = data.halaNum ? `_حلقة ${data.halaNum}` : '';
+  const baseName = sanitizeFilename(`${data.submissionDateFormatted}_${data.sessionType}${halaPart}_${data.teacherName}`);
   let targetFilename = `${baseName}.md`;
   let duplicateIndex = 0;
 
-  while (monthFolder.getFilesByName(targetFilename).hasNext()) {
+  while (_firstNotTrashed(monthFolder.getFilesByName(targetFilename))) {
     duplicateIndex++;
     targetFilename = `${baseName} (${duplicateIndex}).md`;
   }
@@ -731,7 +861,7 @@ function recordToTeacherSheet(yearTeacherFolder, data) {
 
   sheet.appendRow([
     data.reportDateText || data.submissionDateFormatted,
-    data.sessionType,
+    _sessionLabel(data),
     data.studentCategory,
     durationDayFraction,
     data.studentCount !== null ? data.studentCount : '',
@@ -811,10 +941,10 @@ function appendSummaryRows(sheet) {
  */
 function getOrCreateTeacherSpreadsheet(yearTeacherFolder, teacherName, year) {
   const expectedTitle = `${teacherName} - تقارير الحلقات ${year}`;
-  const files = yearTeacherFolder.getFilesByName(expectedTitle);
+  const existing = _firstNotTrashed(yearTeacherFolder.getFilesByName(expectedTitle));
 
-  if (files.hasNext()) {
-    return SpreadsheetApp.openById(files.next().getId());
+  if (existing) {
+    return SpreadsheetApp.openById(existing.getId());
   }
 
   const newSpreadsheet = SpreadsheetApp.create(expectedTitle);
@@ -885,9 +1015,8 @@ function appendErrorToDriveLog(details) {
     '',
   ].join('\n');
 
-  const files = rootFolder.getFilesByName(logFilename);
-  if (files.hasNext()) {
-    const file = files.next();
+  const file = _firstNotTrashed(rootFolder.getFilesByName(logFilename));
+  if (file) {
     file.setContent(file.getBlob().getDataAsString('UTF-8') + '\n' + logEntry);
   } else {
     rootFolder.createFile(logFilename, logEntry, 'text/plain; charset=UTF-8');
@@ -906,8 +1035,10 @@ function sendEmailAlert(details) {
   const body = [
     'السلام عليكم ورحمة الله وبركاته،',
     '',
-    'حدث خطأ أثناء معالجة تقرير حلقة في أكاديمية سنا:',
+    'حدث خطأ أثناء معالجة تقرير حلقة في أكاديمية سنا، ولم يُحفظ التقرير.',
+    'يُرجى التواصل مع المعلم لإعادة إرسال الاستمارة.',
     '',
+    `• المعلم: ${details.teacherName || CONFIG.FALLBACKS.TEACHER_NAME}`,
     `• معرّف التنفيذ: ${details.executionId}`,
     `• التوقيت: ${details.timestamp}`,
     `• رسالة الخطأ: ${details.error}`,
@@ -973,7 +1104,7 @@ function sanitizeFilename(str) {
  * @param {Object} data - Validated submission data.
  */
 function sendTelegramNotification(data) {
-  if (!CONFIG.TELEGRAM.ENABLED) return;
+  if (!CONFIG.TELEGRAM.ENABLED || _TEST_MODE) return;
 
   const botToken = CONFIG.TELEGRAM.BOT_TOKEN;
   const chatId   = CONFIG.TELEGRAM.CHAT_ID;
@@ -990,7 +1121,7 @@ function sendTelegramNotification(data) {
     `• <b>الفترة / النوع:</b> ${escapeHtml(data.sessionTypeName || data.sessionType || 'غير محدد')}`,
     `• <b>تاريخ التقرير:</b> ${escapeHtml(data.reportDateText || data.submissionDateFormatted || 'غير محدد')}`,
     `• <b>مدة الحصة:</b> ${escapeHtml(data.durationFormatted || 'غير محدد')} (<code>${escapeHtml(data.durationTime || '00:00')}</code>)`,
-    `• <b>عدد الطلاب:</b> ${escapeHtml(String(data.studentCount || 0))}`,
+    `• <b>عدد الطلاب:</b> ${escapeHtml(data.studentCount !== null && data.studentCount !== undefined ? String(data.studentCount) : 'غير محدد')}`,
   ];
 
   if (data.fileUrl) {
@@ -1019,21 +1150,24 @@ function sendTelegramNotification(data) {
   const response = UrlFetchApp.fetch(url, buildOptions(chatId));
   const resCode  = response.getResponseCode();
 
-  if (resCode !== 200) {
-    console.warn(`[TELEGRAM ERROR] Status ${resCode} for chat ${chatId}: ${response.getContentText()}`);
-    // If chatId is a bare negative number missing the supergroup -100 prefix, retry once.
-    if (resCode === 400 && !chatId.startsWith('-100')) {
-      const fallbackChatId = `-100${chatId.replace(/^-/, '')}`;
-      console.log(`[TELEGRAM RETRY] Retrying with supergroup ID: ${fallbackChatId}`);
-      const retryRes = UrlFetchApp.fetch(url, buildOptions(fallbackChatId));
-      if (retryRes.getResponseCode() === 200) {
-        console.log('[TELEGRAM SUCCESS] Delivered on retry with supergroup ID.');
-        return;
-      }
-    }
-  } else {
+  if (resCode === 200) {
     console.log('[TELEGRAM SUCCESS] Notification delivered successfully.');
+    return;
   }
+
+  console.warn(`[TELEGRAM ERROR] Status ${resCode} for chat ${chatId}: ${response.getContentText()}`);
+  // If chatId is a bare negative number missing the supergroup -100 prefix, retry once.
+  if (resCode === 400 && !chatId.startsWith('-100')) {
+    const fallbackChatId = `-100${chatId.replace(/^-/, '')}`;
+    console.log(`[TELEGRAM RETRY] Retrying with supergroup ID: ${fallbackChatId}`);
+    const retryRes = UrlFetchApp.fetch(url, buildOptions(fallbackChatId));
+    if (retryRes.getResponseCode() === 200) {
+      console.log('[TELEGRAM SUCCESS] Delivered on retry with supergroup ID.');
+      return;
+    }
+  }
+  // Throw so the caller logs the failure to Drive instead of losing it in the console.
+  throw new Error(`Telegram API returned HTTP ${resCode}: ${response.getContentText()}`);
 }
 
 /**
@@ -1136,22 +1270,21 @@ function exportTeacherMonthlyPdf(teacherName, targetYear, targetMonthName) {
   // Navigate existing folders without creating any — we only create the month folder
   // once we are certain we have a spreadsheet and a tab to export. This prevents
   // orphaned empty folders in Drive when nothing exists yet for this teacher/month.
-  const yearFolders = rootFolder.getFoldersByName(sanitizeFilename(year));
-  if (!yearFolders.hasNext()) return null;
+  const yearFolder = _firstNotTrashed(rootFolder.getFoldersByName(sanitizeFilename(year)));
+  if (!yearFolder) return null;
 
-  const teacherFolders = yearFolders.next().getFoldersByName(sanitizeFilename(teacherName));
-  if (!teacherFolders.hasNext()) return null;
-  const teacherFolder = teacherFolders.next();
+  const teacherFolder = _firstNotTrashed(yearFolder.getFoldersByName(sanitizeFilename(teacherName)));
+  if (!teacherFolder) return null;
 
   const spreadsheetTitle = `${teacherName} - تقارير الحلقات ${year}`;
-  const files = teacherFolder.getFilesByName(spreadsheetTitle);
+  const spreadsheetFile  = _firstNotTrashed(teacherFolder.getFilesByName(spreadsheetTitle));
 
-  if (!files.hasNext()) {
+  if (!spreadsheetFile) {
     console.warn(`[PDF EXPORT] Spreadsheet "${spreadsheetTitle}" not found for teacher "${teacherName}".`);
     return null;
   }
 
-  const spreadsheet = SpreadsheetApp.openById(files.next().getId());
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetFile.getId());
   const sheet       = spreadsheet.getSheetByName(monthName);
 
   if (!sheet) {
