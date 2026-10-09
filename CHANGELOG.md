@@ -1,5 +1,8 @@
 # Changelog
 
+## [5.2.1] — 2026-10-10
+- feat(teachers): أُضيفت المعلمة «سمية حمدي» بالمعرّف `T008` إلى سجل `CONFIG.TEACHERS`.
+
 ## [5.2.0] — 2026-10-01
 - fix(retry): إعادة المحاولة تقتصر على حفظ الملف في Drive، فلا يُنتج فشلٌ لاحق (سجل الأخطاء أو Telegram) ملفاً مكرراً أو صفاً مكرراً أو إشعاراً مكرراً؛ وأخطاء التسجيل غير القاتلة لا توقف المعالجة (`_safeLogToDrive`).
 - fix(lock): رفع مهلة القفل إلى 4 دقائق حتى لا تُسقط الإرسالات المتزامنة، وتنبيه البريد يذكر المعلم وأن التقرير لم يُحفظ.
@@ -57,3 +60,14 @@
 - Removed "Step N:" scaffolding comments from `executeSubmissionPipeline`.
 - Added "why" comment to `normalizeDigitsAndText` explaining the `split/join` workaround.
 - Renamed `values` → `formFields` in `extractFormData` for clarity.
+
+## [4.0.0] — 2026-08-26
+- feat: Apps Script يعالج استجابات Google Forms ويحفظ التقارير Markdown في Drive.
+- feat: ربط `clasp` عبر `.clasp.json` و`.claspignore` للدفع والسحب من الطرفية.
+- feat: مستودع Git محلي مستقل مع `.gitignore`.
+- feat: الإصدار الرابع: نموذج أقصر، واستخراج التاريخ والفترة وعدد الطلاب من المتن، وجداول Sheets سنوية بتبويبات شهرية RTL.
+- feat: إشعارات `@sana_reportsbot` في Telegram لإدارة الأكاديمية فور تسليم التقرير.
+- feat: صفا الإجمالي والمتوسط أسفل جدول كل شهر.
+- feat: تصدير جداول الشهور إلى PDF عند الطلب في مجلدات الشهور.
+- refactor: إشعارات Telegram دفعاً مباشراً، وحذف الـ Webhook لقيود Apps Script.
+- fix: تحويل الأرقام المشرقية (٠-٩) وتنقية نصوص WhatsApp من المحارف الخفية.
