@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-  <base target="_top">
   <meta charset="utf-8">
   <title>لوحة إدارة أكاديمية سنا</title>
   <script src="https://cdn.tailwindcss.com/3.4.17"></script>
@@ -44,7 +43,7 @@
 
     <!-- 1. Numbers -->
     <section id="numbers" aria-labelledby="numbers-h" class="mb-8">
-      <h2 id="numbers-h" class="text-xl font-bold mb-2">الأرقام</h2>
+      <h2 id="numbers-h" tabindex="-1" class="text-xl font-bold mb-2">الأرقام</h2>
       <div class="overflow-x-auto">
         <table class="mb-4 text-sm">
           <caption>الإجمالي منذ بداية السجل</caption>
@@ -82,7 +81,7 @@
 
     <!-- 2. Students -->
     <section id="students" aria-labelledby="students-h" class="mb-8">
-      <h2 id="students-h" class="text-xl font-bold mb-2">الطلاب</h2>
+      <h2 id="students-h" tabindex="-1" class="text-xl font-bold mb-2">الطلاب</h2>
       <div class="flex flex-wrap gap-4 mb-2">
         <div>
           <label for="teacher-select" class="font-bold block">المعلم</label>
@@ -144,7 +143,7 @@
 
     <!-- 3. Fix a name -->
     <section id="fix-name" aria-labelledby="fix-h" class="mb-8">
-      <h2 id="fix-h" class="text-xl font-bold mb-2">تصحيح اسم</h2>
+      <h2 id="fix-h" tabindex="-1" class="text-xl font-bold mb-2">تصحيح اسم</h2>
       <p class="mb-2">اختر المعلم المحدد في قسم الطلاب، ثم الاسم كما ورد خطأً، ثم الاسم الصحيح. يُدمج الصفان في الحال، ولا يُنقض الدمج.</p>
       <form @submit.prevent="reviewAlias()" class="flex flex-col gap-3 max-w-xl">
         <p>المعلم: <strong x-text="teacher"></strong></p>
@@ -214,7 +213,7 @@
 
     <!-- 4. Expenses -->
     <section id="expenses" aria-labelledby="exp-h" class="mb-8">
-      <h2 id="exp-h" class="text-xl font-bold mb-2">المصروفات</h2>
+      <h2 id="exp-h" tabindex="-1" class="text-xl font-bold mb-2">المصروفات</h2>
       <form @submit.prevent="saveExpense()" class="flex flex-wrap gap-4 items-end">
         <div>
           <label for="exp-month" class="font-bold block">الشهر</label>
@@ -251,6 +250,20 @@
 </div>
 
 <script>
+  // The page runs inside Google's sandbox frame, where following "#section"
+  // loads the frame's blank address instead of scrolling. So in-page links
+  // move focus to the section heading (or <main>) themselves.
+  document.addEventListener('click', event => {
+    const link = event.target.closest('a[href^="#"]');
+    if (!link) return;
+    event.preventDefault();
+    const target = document.getElementById(link.getAttribute('href').slice(1));
+    if (!target) return;
+    const heading = target.matches('section') ? target.querySelector('h2') : target;
+    heading.scrollIntoView({ block: 'start' });
+    heading.focus();
+  });
+
   function dashboard() {
     return {
       data: null, status: 'جارٍ تحميل البيانات…', error: '', busy: false, year: '', test: false,
