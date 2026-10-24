@@ -2,7 +2,8 @@
  * ============================================================================
  * Dashboard.js — Admin dashboard web app (M5)
  * ============================================================================
- * Served by doGet() as an Apps Script Web App deployed with
+ * Served by doGet() from DashboardPage.html (Apps Script refuses two files named
+ * "Dashboard", even of different types) as a Web App deployed with
  * "Execute as: User accessing the web app" and "Who has access: Anyone with
  * Google account" (appsscript.json "webapp"). So every read and write runs with
  * the visitor's own Drive permissions: whoever was not given the academy
@@ -23,7 +24,7 @@ const DASHBOARD = {
  * @returns {GoogleAppsScript.HTML.HtmlOutput}
  */
 function doGet() {
-  return HtmlService.createHtmlOutputFromFile('Dashboard')
+  return HtmlService.createHtmlOutputFromFile('DashboardPage')
     .setTitle(DASHBOARD.TITLE)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }

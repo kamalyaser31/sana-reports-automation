@@ -177,7 +177,7 @@
 
 **المؤقّت الليلي** (`installNightlyTrigger`): `applyPendingAliases` ثم `refreshPublicStats`. فما كُتب من اللوحة يظهر في الملف العام صباح اليوم التالي.
 
-## 8. لوحة الإدارة (`Dashboard.js` و`Dashboard.html`)
+## 8. لوحة الإدارة (`Dashboard.js` و`DashboardPage.html`)
 
 **ما تعرضه:**
 - أرقام الإجمالي والشهر بأسماء المعلمين.
@@ -227,7 +227,7 @@
 |---|---|
 | `Students.js` (جديد) | المحلّل، والتطبيع الخفيف، والبدائل، وقاعدة الحلقة، وكتابة التبويبات، و`recordStudentsSafely`، و`applyAlias` و`applyPendingAliases`، و`setStudentGender`. |
 | `PublicStats.js` (جديد) | `refreshPublicStats`، و`installNightlyTrigger`، و`saveExpense`. |
-| `Dashboard.js` و`Dashboard.html` (جديدان) | `doGet()` وصفحة اللوحة، ودوال الكتابة الثلاث التي تستدعيها الصفحة. |
+| `Dashboard.js` و`DashboardPage.html` (جديدان) | `doGet()` وصفحة اللوحة، ودوال الكتابة الثلاث التي تستدعيها الصفحة. |
 | `legacy_stats.py` (جديد، خارج `clasp`) | حساب أرقام ما قبل النظام مرة (القسم 9). |
 | `Code.js` | سطر شرطي بالمفتاح في `executeSubmissionPipeline`، وسطر شرطي في `sendTelegramNotification`، والمفتاح `STUDENTS_REGISTRY.ENABLED` وثوابت الأعمدة في `CONFIG`. |
 | `.claspignore` | إضافة ملفات Apps Script الجديدة. |
