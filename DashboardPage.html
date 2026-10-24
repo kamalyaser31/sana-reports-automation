@@ -94,13 +94,21 @@
           <input id="search" type="search" x-model="search" class="border border-gray-700 p-1" aria-describedby="search-count">
           <p id="search-count" x-text="filteredStudents().length + ' طالباً'"></p>
         </div>
+        <div>
+          <label for="absent-filter" class="font-bold block">اعرض</label>
+          <select id="absent-filter" x-model="absentDays" class="border border-gray-700 p-1" aria-describedby="search-count">
+            <option value="0">كل الطلاب</option>
+            <option value="14">الغائبين أكثر من 14 يوماً</option>
+            <option value="30">الغائبين أكثر من 30 يوماً</option>
+          </select>
+        </div>
       </div>
       <div class="overflow-x-auto">
         <table class="text-sm">
-          <caption x-text="'طلاب ' + teacher + '، الأحدث حضوراً أولاً'"></caption>
+          <caption x-text="(absentDays === '0' ? 'طلاب ' : 'الغائبون أكثر من ' + absentDays + ' يوماً من طلاب ') + teacher + '، الأحدث حضوراً أولاً'"></caption>
           <thead><tr>
             <th scope="col">الاسم</th><th scope="col">الجنس</th><th scope="col">الفئة</th>
-            <th scope="col">أول ظهور</th><th scope="col">آخر ظهور</th><th scope="col">الحضور</th>
+            <th scope="col">أول ظهور</th><th scope="col">آخر ظهور</th><th scope="col">أيام الغياب</th><th scope="col">الحضور</th>
             <th scope="col">آخر حفظ</th><th scope="col">الإعادة</th><th scope="col">الأوسمة</th>
             <th scope="col">السن</th><th scope="col">سنة الميلاد والهاتف</th>
           </tr></thead>
@@ -119,6 +127,7 @@
                           @click="saveGender(s)">احفظ</button>
                 </td>
                 <td x-text="s.category"></td><td x-text="s.firstSeen"></td><td x-text="s.lastSeen"></td>
+                <td x-text="daysAway(s)"></td>
                 <td x-text="s.attendance"></td><td x-text="s.lastHifz"></td>
                 <td x-text="s.repeats"></td><td x-text="s.medals"></td>
                 <td x-text="s.age === '' ? '' : s.age + ' سنة'"></td>
@@ -133,6 +142,8 @@
                           :disabled="busy || !detailsChanged(s)"
                           :aria-label="'احفظ سنة ميلاد وهاتف ' + s.name"
                           @click="saveDetails(s)">احفظ</button>
+                  <a x-show="s.phone" :href="'https://wa.me/' + String(s.phone).replace(/\D/g, '')" target="_blank" rel="noopener"
+                     class="underline ms-1" :aria-label="'راسل ' + s.name + ' على WhatsApp (يفتح في نافذة جديدة)'">WhatsApp</a>
                 </td>
               </tr>
             </template>
@@ -267,7 +278,7 @@
   function dashboard() {
     return {
       data: null, status: 'جارٍ تحميل البيانات…', error: '', busy: false, year: '', test: false,
-      month: '', teacher: '', search: '', genders: {},
+      month: '', teacher: '', search: '', absentDays: '0', genders: {},
       details: {},
       aliasFrom: '', aliasMode: 'list', aliasToList: '', aliasToTyped: '', review: null, pendingDelete: -1,
       expMonth: '', expAmount: '', expCurrency: 'EGP',
@@ -328,9 +339,20 @@
         const t = this.data && this.data.teachers.find(x => x.name === this.teacher);
         return t ? t.students : [];
       },
+      // Same matching key as the registry (studentNameKey), so «فاطمه» finds «فاطمة».
+      nameKey(name) {
+        return String(name || '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي')
+          .replace(/[ً-ْٰـ\s]/g, '');
+      },
+      daysAway(s) {
+        if (!s.lastSeen || !this.data) return '';
+        return Math.round((Date.parse(this.data.today) - Date.parse(s.lastSeen)) / 86400000);
+      },
       filteredStudents() {
-        const q = this.search.trim();
-        return this.currentStudents().filter(s => !q || s.name.indexOf(q) !== -1);
+        const q = this.nameKey(this.search);
+        const min = Number(this.absentDays);
+        return this.currentStudents().filter(s =>
+          (!q || this.nameKey(s.name).indexOf(q) !== -1) && (!min || this.daysAway(s) > min));
       },
       focusEl(id) {
         const el = document.getElementById(id);
