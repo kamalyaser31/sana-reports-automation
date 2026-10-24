@@ -108,6 +108,11 @@ const CONFIG = {
     'ملاحظات الإدارة',
   ],
 
+  // Off until install day (S-31 in PLAN_STUDENTS_SHEET.md); integration tests run it regardless.
+  STUDENTS_REGISTRY: {
+    ENABLED: false,
+  },
+
   TELEGRAM: {
     ENABLED: true,
     get BOT_TOKEN() { return _getSecret('TELEGRAM_BOT_TOKEN'); },
@@ -211,6 +216,12 @@ function executeSubmissionPipeline(e, executionId, startTime) {
   } catch (sheetError) {
     console.error(`[SHEET WARNING] [ExecutionID: ${executionId}] Could not append to teacher sheet:`, sheetError.message);
     _safeLogToDrive(executionId, startTime, `Google Sheets Warning: ${sheetError.message}`, sheetError.stack);
+  }
+
+  // The students registry is non-fatal too; recordStudentsSafely logs its own failures.
+  if (CONFIG.STUDENTS_REGISTRY.ENABLED || _TEST_MODE) {
+    const registry = recordStudentsSafely(driveTarget.yearFolder, validatedData, executionId, startTime);
+    if (registry) validatedData.newStudents = registry.newStudents;
   }
 
   // Telegram is non-fatal: log failures to Drive so they are not silently lost.
@@ -1135,6 +1146,9 @@ function sendTelegramNotification(data) {
     `• <b>عدد الطلاب:</b> ${escapeHtml(data.studentCount !== null && data.studentCount !== undefined ? String(data.studentCount) : 'غير محدد')}`,
   ];
 
+  if (data.newStudents && data.newStudents.length) {
+    messageLines.push(`• <b>طلاب جدد:</b> ${escapeHtml(data.newStudents.join('، '))}`);
+  }
   if (data.fileUrl) {
     messageLines.push(`• <b>رابط التقرير:</b> <a href="${escapeHtml(data.fileUrl)}">فتح الملف في Google Drive</a>`);
   }

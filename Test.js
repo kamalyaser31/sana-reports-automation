@@ -449,6 +449,13 @@ function _testGenerateMarkdown() {
 /** يبني نص تقرير بصيغة formatStudent في تطبيق التقارير. */
 function _sampleReport(blocks) {
   const sep = '━━━━━━━━━━━━━━━';
+  return ['بسم الله الرحمن الرحيم', 'التاريخ: الجمعة، ٢٣ أكتوبر ٢٠٢٦', 'الفترة: صباحية',
+    'رقم الحلقة: 1', `عدد الطلاب: ${blocks.length}`, sep, _sampleStudentText(blocks)].join('\n');
+}
+
+/** كتل الطلاب وحدها بصيغة formatStudent، ثم خاتمة التقرير. */
+function _sampleStudentText(blocks) {
+  const sep = '━━━━━━━━━━━━━━━';
   const body = blocks.map(b => {
     const lines = [`${b.female ? 'الطالبة' : 'الطالب'}: ${b.name}`, ''];
     lines.push('التسميع:', 'سورة نوح 1-20', `التقييم: ${b.grade || 'ممتاز'}`, sep);
@@ -457,9 +464,7 @@ function _sampleReport(blocks) {
     if (b.medal) lines.push(sep, 'الوسام:', b.medal);
     return lines.join('\n') + `\n\n${sep}`;
   });
-  return ['بسم الله الرحمن الرحيم', 'التاريخ: الجمعة، ٢٣ أكتوبر ٢٠٢٦', 'الفترة: صباحية',
-    'رقم الحلقة: 1', `عدد الطلاب: ${blocks.length}`, sep].concat(body)
-    .concat(['', '*نسأل الله لهم التوفيق والسداد.*']).join('\n');
+  return body.concat(['', '*نسأل الله لهم التوفيق والسداد.*']).join('\n');
 }
 
 /** سياق تقرير جاهز لـ applyReportToStudents. */
@@ -628,6 +633,24 @@ function _testMergeStudents() {
   });
 }
 
+function _testRegistryRows() {
+  _suite('buildHalaqaRow / rowsToAliases', () => {
+    const ctx = _sampleContext(5, [{ name: 'حمزة علاء' }], { reportId: 'r1', session: 'صباحية', halaNum: '2', minutes: 90 });
+    _eq(buildHalaqaRow(ctx, 0).slice(2), ['سمية حمدي', 'صباحية', '2', 'أطفال', 90, 0], 'halaqa row columns');
+    _eq(buildHalaqaRow(ctx, 0)[0], 'r1', 'keyed by report_id');
+
+    const aliases = rowsToAliases([
+      ['سمية حمدي', ' حمزه  عالء ', 'حمزة علاء', ''],
+      ['سمية حمدي', 'منى', 'منى سامي', new Date()],
+      ['', 'ناقص', 'ناقص', ''],
+    ]);
+    _eq(aliases.length, 2, 'incomplete alias row ignored');
+    _eq([aliases[0].row, aliases[0].from, aliases[0].applied], [2, 'حمزه عالء', false], 'pending alias');
+    _ok(aliases[1].applied, 'dated alias is applied');
+    _eq(_teacherTabName('أ/ب:ج'), 'أ_ب_ج', 'tab name sanitized');
+  });
+}
+
 // ============================================================================
 // ③ تشغيل جميع اختبارات الوحدة
 // ============================================================================
@@ -656,6 +679,7 @@ function runAllUnitTests() {
   _testParseStudents();
   _testSlotRule();
   _testMergeStudents();
+  _testRegistryRows();
 
   _report('UNIT TESTS');
 }
@@ -780,6 +804,81 @@ function integrationTest_UnknownTeacher() {
   _eq(result.validationStatus, 'VALID',  'unknown teacher is still VALID');
 }
 
+/**
+ * اختبار تكاملي — سجل الطلاب: تقرير، وإعادة إرساله، وتقرير ثانٍ، وعمود إداري،
+ * ثم بديل يُدمج في الحال، وتصحيح جنس. والأسماء بوسم التشغيل، فلا تختلط بتشغيل سابق.
+ */
+function integrationTest_StudentsRegistry() {
+  const tag = String(Date.now()).slice(-6);
+  const hamza = `حمزة ${tag}`;
+  const hoda = `هدى ${tag}`;
+  const typo = `هدا ${tag}`;
+  const teacher = 'سمية حمدي';
+  const submit = (date, hala, blocks) => _runIntegrationSubmission({
+    'اسم المعلم': teacher, 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '0',
+    'التقرير': _buildTestReport(date, 'صباحية', blocks.length, hala, _sampleStudentText(blocks)),
+    'ملاحظات خاصة للإدارة': '',
+  });
+  const tab = () => {
+    _TEST_MODE = true;
+    try { return _findRegistry('2026').getSheetByName(teacher); }
+    finally { _TEST_MODE = false; }
+  };
+  const find = (name) => readStudentsTab(tab()).students.find(s => s.key === studentNameKey(name));
+
+  const first = submit('01-09-2026', `${tag}1`, [
+    { name: hamza, hifz: 'نوح 1-10', grade: 'إعادة' }, { name: hoda, female: true },
+  ]);
+  _eq(first.newStudents, [hamza, hoda], 'first report: both new');
+  const resent = submit('01-09-2026', `${tag}1`, [{ name: hamza, grade: 'إعادة' }, { name: hoda, female: true }]);
+  _eq(deriveStudentStats(find(hamza).slots).attendance, 1, 'resubmission not counted');
+  const halaqat = () => {
+    _TEST_MODE = true;
+    try { return _readBody(_findRegistry('2026').getSheetByName(REGISTRY.HALAQAT_TAB)); }
+    finally { _TEST_MODE = false; }
+  };
+  const counted = id => halaqat().filter(r => r[0] === id).map(r => r[7]);
+  _eq(counted(first.executionId), [2], 'halaqa row: two students counted');
+  _eq(counted(resent.executionId), [0], 'resubmission row counts nobody');
+  _eq(deriveStudentStats(find(hamza).slots).repeats, 1, 'resubmission adds no repeat');
+
+  _section('عمود إداري يبقى مع صفه');
+  const sheet = tab();
+  const adminCol = STUDENT_SYSTEM_COLUMNS + 1;
+  sheet.getRange(1, adminCol).setValue('ملاحظة الإدارة');
+  const body = _readBody(sheet);
+  const hamzaRow = body.findIndex(r => (rowToStudent(r) || {}).key === studentNameKey(hamza));
+  sheet.getRange(hamzaRow + 2, adminCol).setValue('متابعة');
+  const manual = `صف يدوي ${tag}`;
+  sheet.appendRow([manual]);
+
+  const second = submit('02-09-2026', `${tag}1`, [{ name: `حمزه ${tag}` }, { name: typo, female: true }]);
+  _eq(second.newStudents, [typo], 'only the misspelt name is new');
+  _eq(find(hamza).extra[0], 'متابعة', 'admin cell moved with its row');
+  _ok(_readBody(tab()).some(r => r[0] === manual), 'hand-typed row without column M kept');
+  _eq(deriveStudentStats(find(hamza).slots).attendance, 2, 'ة/ه spelling counted on the same row');
+  _section('بديل يُدمج في الحال');
+  _TEST_MODE = true;
+  try {
+    _eq(applyAlias({ teacher, from: typo, to: hoda }, '2026').outcome, 'merged', 'alias merged');
+    _eq(applyAlias({ teacher, from: typo, to: hoda }, '2026').outcome, 'absent', 'second time changes nothing');
+    _eq(applyPendingAliases('2026').failed, 0, 'no pending alias fails');
+    let sameNameError = '';
+    try { applyAlias({ teacher, from: hoda, to: `هدي ${tag}` }, '2026'); }
+    catch (e) { sameNameError = e.message; }
+    _ok(sameNameError !== '', 'alias between two spellings of one key is refused');
+    setStudentGender(teacher, studentNameKey(hamza), STUDENT_GENDER.FEMALE, '2026');
+  } finally {
+    _TEST_MODE = false;
+  }
+  _isNull(find(typo) || null, 'misspelt row removed');
+  _eq(deriveStudentStats(find(hoda).slots).attendance, 2, 'merged row has both halaqat');
+  _eq(find(hamza).gender, STUDENT_GENDER.FEMALE, 'gender corrected by key');
+
+  const third = submit('03-09-2026', `${tag}1`, [{ name: typo, female: true }]);
+  _eq(third.newStudents.length, 0, 'alias applies to the next report');
+}
+
 // ============================================================================
 // ⑤ المُشغِّل الكامل
 // ============================================================================
@@ -802,6 +901,7 @@ function runAllTests() {
   _suite('Integration: EasternArabicDigits',         integrationTest_EasternArabicDigits);
   _suite('Integration: MissingFields',               integrationTest_MissingFields);
   _suite('Integration: UnknownTeacher',              integrationTest_UnknownTeacher);
+  _suite('Integration: StudentsRegistry',            integrationTest_StudentsRegistry);
   _report('INTEGRATION TESTS');
 
   console.log(`\nSUMMARY — Unit: ${unitPass}P/${unitFail}F | Integration: ${_T.pass}P/${_T.fail}F`);

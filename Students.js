@@ -425,3 +425,349 @@ function _cloneStudent(s) {
   Object.keys(s.slots).forEach(k => { slots[k] = s.slots[k].slice(); });
   return Object.assign({}, s, { slots, extra: (s.extra || []).slice() });
 }
+
+/**
+ * One «الحلقات» row (S-15). A report in which nobody was counted keeps its row
+ * with 0, and the public statistics skip it.
+ * @param {Object} report - From buildReportContext.
+ * @param {number} counted
+ * @returns {Array}
+ */
+function buildHalaqaRow(report, counted) {
+  return [report.reportId, report.date, report.teacher, report.session, report.halaNum,
+    report.category, report.minutes, counted];
+}
+
+/**
+ * Reads «الأسماء البديلة» values (header excluded) into alias objects.
+ * @param {Array<Array>} values
+ * @returns {Array<{row: number, teacher: string, from: string, to: string, applied: boolean}>}
+ */
+function rowsToAliases(values) {
+  return (values || []).map((v, i) => ({
+    row:     i + 2,
+    teacher: String(v[0] || '').trim(),
+    from:    cleanStudentName(v[1]),
+    to:      cleanStudentName(v[2]),
+    applied: v[3] !== '' && v[3] !== null && v[3] !== undefined,
+  })).filter(a => a.teacher && a.from && a.to);
+}
+
+// ============================================================================
+// 6. REGISTRY SPREADSHEET (M2)
+// ============================================================================
+
+const REGISTRY = {
+  FILE_PREFIX:  'طلاب أكاديمية سنا',
+  ALIASES_TAB:  'الأسماء البديلة',
+  EXPENSES_TAB: 'المصروفات',
+  HALAQAT_TAB:  'الحلقات',
+  DATE_FORMAT:  'dd-mm-yyyy',
+  STUDENT_HEADERS: [
+    'اسم الطالب', 'الجنس', 'فئة الطلاب', 'أول ظهور', 'آخر ظهور', 'عدد مرات الحضور',
+    'أول حفظ جديد', 'تاريخ أول حفظ', 'آخر حفظ جديد', 'تاريخ آخر حفظ',
+    'مرات الإعادة', 'عدد الأوسمة', 'بيانات النظام',
+  ],
+  ALIAS_HEADERS:   ['المعلم', 'الاسم كما ورد', 'الاسم الصحيح', 'تاريخ التطبيق'],
+  EXPENSE_HEADERS: ['الشهر', 'المبلغ', 'العملة'],
+  HALAQA_HEADERS:  ['report_id', 'التاريخ', 'المعلم', 'الفترة', 'رقم الحلقة', 'الفئة',
+    'المدة بالدقائق', 'الطلاب المحسوبون'],
+};
+
+/** Columns of a teacher tab that hold dates (1-based): D, E, H, J. */
+const STUDENT_DATE_COLUMNS = [4, 5, 8, 10];
+
+/**
+ * Records one report in the registry, inside the submission lock.
+ * @param {GoogleAppsScript.Drive.Folder} yearFolder
+ * @param {Object} data - Validated data.
+ * @returns {{ newStudents: string[], counted: number }}
+ */
+function recordStudents(yearFolder, data) {
+  const report = buildReportContext(data);
+  const ss = getOrCreateRegistry(yearFolder, data.submissionYear);
+  const aliases = rowsToAliases(_readBody(ss.getSheetByName(REGISTRY.ALIASES_TAB)));
+  const sheet = _getOrCreateTeacherTab(ss, report.teacher);
+  const current = readStudentsTab(sheet);
+
+  const result = applyReportToStudents(current.students, report, buildAliasMap(aliases));
+  writeStudentsTab(sheet, result.students, current.orphans);
+  _appendHalaqaOnce(ss.getSheetByName(REGISTRY.HALAQAT_TAB), buildHalaqaRow(report, result.counted));
+  return { newStudents: result.newStudents, counted: result.counted };
+}
+
+/**
+ * Non-fatal wrapper used by the pipeline: the report is already saved, so a
+ * registry failure is logged to Drive and the run goes on.
+ * @param {GoogleAppsScript.Drive.Folder} yearFolder
+ * @param {Object} data
+ * @param {string} executionId
+ * @param {Date} startTime
+ * @returns {{ newStudents: string[], counted: number }|null}
+ */
+function recordStudentsSafely(yearFolder, data, executionId, startTime) {
+  try {
+    return recordStudents(yearFolder, data);
+  } catch (error) {
+    console.error(`[REGISTRY WARNING] [ExecutionID: ${executionId}]`, error.message);
+    _safeLogToDrive(executionId, startTime, `Students registry failed: ${error.message}`, error.stack);
+    return null;
+  }
+}
+
+/**
+ * Opens the year's registry, creating it with its tabs on first use. A new
+ * year copies the previous year's aliases (S-02).
+ * @param {GoogleAppsScript.Drive.Folder} yearFolder
+ * @param {string} year
+ * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet}
+ */
+function getOrCreateRegistry(yearFolder, year) {
+  const title = `${REGISTRY.FILE_PREFIX} ${year}`;
+  const existing = _firstNotTrashed(yearFolder.getFilesByName(title));
+  if (existing) return SpreadsheetApp.openById(existing.getId());
+
+  const ss = SpreadsheetApp.create(title);
+  DriveApp.getFileById(ss.getId()).moveTo(yearFolder);
+  const first = ss.getSheets()[0];
+  first.setName(REGISTRY.ALIASES_TAB);
+  _styleHeader(first, REGISTRY.ALIAS_HEADERS);
+  _styleHeader(ss.insertSheet(REGISTRY.EXPENSES_TAB), REGISTRY.EXPENSE_HEADERS);
+  const halaqat = ss.insertSheet(REGISTRY.HALAQAT_TAB);
+  _styleHeader(halaqat, REGISTRY.HALAQA_HEADERS);
+  halaqat.hideSheet();
+
+  const previous = _findRegistry(String(Number(year) - 1));
+  if (previous) {
+    const carried = _readBody(previous.getSheetByName(REGISTRY.ALIASES_TAB));
+    if (carried.length) first.getRange(2, 1, carried.length, REGISTRY.ALIAS_HEADERS.length).setValues(carried);
+  }
+  return ss;
+}
+
+/**
+ * The registry of a year, or null when it does not exist yet.
+ * @param {string} year
+ * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet|null}
+ */
+function _findRegistry(year) {
+  const yearFolder = _firstNotTrashed(getRootFolder().getFoldersByName(sanitizeFilename(year)));
+  if (!yearFolder) return null;
+  const file = _firstNotTrashed(yearFolder.getFilesByName(`${REGISTRY.FILE_PREFIX} ${year}`));
+  return file ? SpreadsheetApp.openById(file.getId()) : null;
+}
+
+/**
+ * Sheet names may not contain : \ / ? * [ ].
+ * @param {string} teacher
+ * @returns {string}
+ */
+function _teacherTabName(teacher) {
+  return String(teacher || CONFIG.FALLBACKS.TEACHER_NAME).replace(/[:\\\/?*\[\]]/g, '_').substring(0, 100);
+}
+
+/**
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} ss
+ * @param {string} teacher
+ * @returns {GoogleAppsScript.Spreadsheet.Sheet}
+ */
+function _getOrCreateTeacherTab(ss, teacher) {
+  const name = _teacherTabName(teacher);
+  const existing = ss.getSheetByName(name);
+  if (existing) return existing;
+  const sheet = ss.insertSheet(name, 0);
+  _styleHeader(sheet, REGISTRY.STUDENT_HEADERS);
+  sheet.hideColumns(STUDENT_SYSTEM_COLUMNS);
+  return sheet;
+}
+
+/**
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {string[]} headers
+ */
+function _styleHeader(sheet, headers) {
+  sheet.setRightToLeft(true);
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+}
+
+/**
+ * All rows below the header, as one batch read.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @returns {Array<Array>}
+ */
+function _readBody(sheet) {
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return [];
+  return sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+}
+
+/**
+ * Reads a teacher tab. Rows without valid system data in column M (for
+ * example a row the admin typed by hand) are kept aside and written back, so
+ * a rewrite never loses them.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @returns {{ students: Array<Object>, orphans: Array<Array> }}
+ */
+function readStudentsTab(sheet) {
+  const students = [];
+  const orphans = [];
+  _readBody(sheet).forEach(row => {
+    if (row.every(v => v === '' || v === null)) return;
+    const s = rowToStudent(row);
+    if (s) students.push(s); else orphans.push(row);
+  });
+  return { students, orphans };
+}
+
+/**
+ * Rewrites a teacher tab below the header in one batch, sorted, with the
+ * orphan rows last. Admin header cells after column M are left as they are.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Array<Object>} students
+ * @param {Array<Array>} orphans
+ */
+function writeStudentsTab(sheet, students, orphans) {
+  const rows = sortStudentsByLastSeen(students).map(studentToRow).concat(orphans || []);
+  const width = Math.max(STUDENT_SYSTEM_COLUMNS, sheet.getLastColumn(), ...rows.map(r => r.length));
+  const padded = rows.map(r => r.concat(new Array(width - r.length).fill('')));
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, width).clearContent();
+  if (!padded.length) return;
+  sheet.getRange(2, 1, padded.length, width).setValues(padded);
+  STUDENT_DATE_COLUMNS.forEach(c => sheet.getRange(2, c, padded.length, 1).setNumberFormat(REGISTRY.DATE_FORMAT));
+}
+
+/**
+ * Appends a «الحلقات» row unless its report_id is already there.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Array} row
+ */
+function _appendHalaqaOnce(sheet, row) {
+  const ids = _readBody(sheet).map(r => r[0]);
+  if (ids.indexOf(row[0]) !== -1) return;
+  sheet.appendRow(row);
+  sheet.getRange(sheet.getLastRow(), 2).setNumberFormat(REGISTRY.DATE_FORMAT);
+}
+
+// ============================================================================
+// 7. ADMIN WRITES (called by the dashboard in M5, and by the nightly trigger)
+// ============================================================================
+
+/**
+ * Runs fn under the script lock that the submission pipeline also takes, so a
+ * dashboard write and an incoming report never interleave.
+ * @param {Function} fn
+ * @returns {*}
+ */
+function _withScriptLock(fn) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(CONFIG.LOCK_TIMEOUT_MS)) {
+    throw new Error('النظام مشغول بتقرير آخر الآن؛ أعد المحاولة بعد دقيقة.');
+  }
+  try { return fn(); }
+  finally { lock.releaseLock(); }
+}
+
+/**
+ * Saves an alias and merges at once (S-12). If the merge fails, the alias row
+ * stays without a date and applyPendingAliases retries it at night.
+ * @param {{teacher: string, from: string, to: string}} alias
+ * @param {string} [year] - Defaults to the current year.
+ * @returns {{ outcome: 'merged'|'renamed'|'absent' }}
+ */
+function applyAlias(alias, year) {
+  const from = cleanStudentName(alias.from);
+  const to = cleanStudentName(alias.to);
+  if (!alias.teacher || !from || !to) throw new Error('اختر المعلم والاسمين.');
+  if (studentNameKey(from) === studentNameKey(to)) throw new Error('الاسمان واحد بعد التطبيع، فلا حاجة إلى بديل.');
+
+  return _withScriptLock(() => {
+    const ss = _registryOrThrow(year);
+    const sheet = ss.getSheetByName(_teacherTabName(alias.teacher));
+    if (!sheet) throw new Error(`لا تبويب للمعلم «${alias.teacher}» في السجل.`);
+    const aliasTab = ss.getSheetByName(REGISTRY.ALIASES_TAB);
+    aliasTab.appendRow([alias.teacher, from, to, '']);
+    const aliasRow = aliasTab.getLastRow();
+    const outcome = _applyAliasToTab(sheet, { from, to });
+    aliasTab.getRange(aliasRow, 4).setValue(new Date()).setNumberFormat(REGISTRY.DATE_FORMAT);
+    return { outcome };
+  });
+}
+
+/**
+ * Nightly: applies every alias row that has no applied date yet. Each row is
+ * independent, so one failure does not stop the others.
+ * @param {string} [year]
+ * @returns {{ applied: number, failed: number }}
+ */
+function applyPendingAliases(year) {
+  return _withScriptLock(() => {
+    const ss = _findRegistry(String(year || new Date().getFullYear()));
+    if (!ss) return { applied: 0, failed: 0 };
+    const aliasTab = ss.getSheetByName(REGISTRY.ALIASES_TAB);
+    let applied = 0;
+    let failed = 0;
+    rowsToAliases(_readBody(aliasTab)).filter(a => !a.applied).forEach(a => {
+      try {
+        const sheet = ss.getSheetByName(_teacherTabName(a.teacher));
+        if (sheet) _applyAliasToTab(sheet, a);
+        aliasTab.getRange(a.row, 4).setValue(new Date()).setNumberFormat(REGISTRY.DATE_FORMAT);
+        applied++;
+      } catch (error) {
+        failed++;
+        console.error(`[ALIAS WARNING] ${a.teacher}: ${a.from} → ${a.to}:`, error.message);
+      }
+    });
+    return { applied, failed };
+  });
+}
+
+/**
+ * Corrects a student's gender (S-11). The row is found by its key in column M,
+ * because sorting moves rows.
+ * @param {string} teacher
+ * @param {string} key
+ * @param {string} gender - STUDENT_GENDER value.
+ * @param {string} [year]
+ */
+function setStudentGender(teacher, key, gender, year) {
+  if (gender !== STUDENT_GENDER.MALE && gender !== STUDENT_GENDER.FEMALE) throw new Error('الجنس ذكر أو أنثى.');
+  _withScriptLock(() => {
+    const sheet = _registryOrThrow(year).getSheetByName(_teacherTabName(teacher));
+    if (!sheet) throw new Error(`لا تبويب للمعلم «${teacher}» في السجل.`);
+    const index = _readBody(sheet).findIndex(r => {
+      const s = rowToStudent(r);
+      return s && s.key === key;
+    });
+    if (index === -1) throw new Error('لم يوجد الطالب؛ لعل صفه دُمج. حدّث الصفحة.');
+    sheet.getRange(index + 2, 2).setValue(gender);
+  });
+}
+
+/**
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {{from: string, to: string}} alias
+ * @returns {'merged'|'renamed'|'absent'}
+ */
+function _applyAliasToTab(sheet, alias) {
+  const current = readStudentsTab(sheet);
+  const hasRight = current.students.some(s => s.key === studentNameKey(alias.to));
+  const result = applyAliasToStudents(current.students, alias);
+  if (!result.changed) return 'absent';
+  writeStudentsTab(sheet, result.students, current.orphans);
+  return hasRight ? 'merged' : 'renamed';
+}
+
+/**
+ * @param {string} [year]
+ * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet}
+ */
+function _registryOrThrow(year) {
+  const ss = _findRegistry(String(year || new Date().getFullYear()));
+  if (!ss) throw new Error('لم يُنشأ سجل الطلاب لهذه السنة بعد.');
+  return ss;
+}
