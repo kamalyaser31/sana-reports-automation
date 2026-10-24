@@ -1120,6 +1120,9 @@ function integrationTest_StudentsRegistry() {
   try {
     _eq(applyAlias({ teacher, from: typo, to: hoda }, '2026').outcome, 'merged', 'alias merged');
     _eq(applyAlias({ teacher, from: typo, to: hoda }, '2026').outcome, 'absent', 'second time changes nothing');
+    const aliasRows = rowsToAliases(_readBody(_findRegistry('2026').getSheetByName(REGISTRY.ALIASES_TAB)))
+      .filter(a => a.teacher === teacher && a.from === typo);
+    _eq(aliasRows.length, 1, 'the same alias twice keeps one row');
     _eq(applyPendingAliases('2026').failed, 0, 'no pending alias fails');
     let sameNameError = '';
     try { applyAlias({ teacher, from: hoda, to: `هدي ${tag}` }, '2026'); }

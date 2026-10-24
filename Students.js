@@ -965,8 +965,11 @@ function applyAlias(alias, year) {
     const sheet = ss.getSheetByName(_teacherTabName(alias.teacher));
     if (!sheet) throw new Error(`لا تبويب للمعلم «${alias.teacher}» في السجل.`);
     const aliasTab = ss.getSheetByName(REGISTRY.ALIASES_TAB);
-    aliasTab.appendRow([alias.teacher, from, to, '']);
-    const aliasRow = aliasTab.getLastRow();
+    // The same wrong name again replaces its row, so the list holds one alias per name.
+    const existing = rowsToAliases(_readBody(aliasTab))
+      .find(a => a.teacher === alias.teacher && studentNameKey(a.from) === studentNameKey(from));
+    const aliasRow = existing ? existing.row : aliasTab.getLastRow() + 1;
+    aliasTab.getRange(aliasRow, 1, 1, 4).setValues([[alias.teacher, from, to, '']]);
     const outcome = _applyAliasToTab(sheet, { from, to });
     aliasTab.getRange(aliasRow, 4).setValue(new Date()).setNumberFormat(REGISTRY.DATE_FORMAT);
     return { outcome };
