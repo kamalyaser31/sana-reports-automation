@@ -858,6 +858,7 @@ function _testApi() {
     _section('قراءة الطلب');
     _eq(throws(() => parseApiRequest('{')), 'error', 'malformed JSON refused');
     _eq(throws(() => parseApiRequest('{"action":"_getSecret"}')), 'error', 'unknown action refused');
+    _eq(throws(() => parseApiRequest('{"action":"constructor"}')), 'error', 'built-in object names refused');
     _eq(throws(() => parseApiRequest('{"action":"data","year":"26"}')), 'error', 'bad year refused');
     const req = parseApiRequest(JSON.stringify({ action: 'saveRate', token: 't', test: true, year: '2026',
       args: { teacher: ' سمية ', rate: 50, extra: { a: 1 } } }));
@@ -878,6 +879,20 @@ function _testApi() {
     _eq(throws(() => apiSession('', 'secret', cache)), 'auth', 'no token refused');
     _eq(throws(() => handleApiRequest({ action: 'data', token: 'nope', year: '2026', args: {} },
       { password: 'secret', cache })), 'auth', 'data needs a session');
+    _eq(apiSession(apiLogin('أحمد', 'secret', ' secret ', cache).token, 'secret ', cache), 'أحمد',
+      'spaces around the stored password ignored');
+
+    _section('قفل الدخول');
+    const busy = _memoryCache();
+    const lockHeld = { tryLock: () => false, releaseLock() {} };
+    const login = { action: 'login', token: '', year: '2026', args: { name: 'أحمد', password: 'wrong' } };
+    _eq(throws(() => handleApiRequest(login, { password: 'secret', cache: busy, loginLock: lockHeld })), 'auth',
+      'login refused while the lock is held');
+    _isNull(busy.get(API.FAILS_KEY), 'a refused try does not touch the counter');
+    let released = 0;
+    const freeLock = { tryLock: () => true, releaseLock: () => { released++; } };
+    throws(() => handleApiRequest(login, { password: 'secret', cache: busy, loginLock: freeLock }));
+    _eq([busy.get(API.FAILS_KEY), released], ['1', 1], 'a wrong try counts once and releases the lock');
 
     _section('منع التخمين');
     const guarded = _memoryCache();
@@ -1294,7 +1309,7 @@ function integrationTest_Api() {
     'التقرير': _buildTestReport('06-09-2026', 'صباحية', 3, `${tag}6`, _sampleStudentText([{ name: `منير ${tag}` }])),
     'ملاحظات خاصة للإدارة': '',
   });
-  const deps = { password: `pass-${tag}`, cache: _memoryCache() };
+  const deps = { password: `pass-${tag}`, cache: _memoryCache(), loginLock: LockService.getDocumentLock() || LockService.getUserLock() };
   const call = (action, args, token) => handleApiRequest(
     { action, token: token || '', test: true, year: '2026', args: args || {} }, deps);
 

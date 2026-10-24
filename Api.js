@@ -18,6 +18,7 @@ const API = {
   SESSION_SECONDS: 6 * 60 * 60,
   MAX_FAILS:       10,
   LOCK_SECONDS:    15 * 60,
+  LOGIN_WAIT_MS:   5000,
   NAME_MAX:        40,
   FAILS_KEY:       'api_fails',
   LOCK_KEY:        'api_locked',
@@ -73,6 +74,9 @@ function doPost(e) {
     reply = handleApiRequest(request, {
       password: PropertiesService.getScriptProperties().getProperty(API.PASSWORD_KEY) || '',
       cache: CacheService.getScriptCache(),
+      // The form's document lock: shared by every anonymous call, and not the
+      // script lock the report pipeline waits on for minutes.
+      loginLock: LockService.getDocumentLock() || LockService.getUserLock(),
     });
   } catch (error) {
     reply = { ok: false, error: String(error && error.message || error), auth: !!(error && error.auth) };
@@ -90,7 +94,8 @@ function parseApiRequest(contents) {
   try { body = JSON.parse(String(contents || '')); } catch (e) { throw new Error('طلب غير مفهوم.'); }
   if (!body || typeof body !== 'object') throw new Error('طلب غير مفهوم.');
   const action = String(body.action || '');
-  if (action !== 'login' && action !== 'data' && !API_WRITES[action]) throw new Error('طلب غير معروف.');
+  const known = action === 'login' || action === 'data' || Object.prototype.hasOwnProperty.call(API_WRITES, action);
+  if (!known) throw new Error('طلب غير معروف.');
   const year = String(body.year || new Date().getFullYear());
   if (!/^\d{4}$/.test(year)) throw new Error('السنة أربعة أرقام.');
   const args = body.args && typeof body.args === 'object' ? body.args : {};
@@ -103,15 +108,21 @@ function parseApiRequest(contents) {
 }
 
 /**
- * Runs one checked request. deps carries the configured password and the cache,
- * so tests can pass their own.
+ * Runs one checked request. deps carries the configured password, the cache and
+ * the login lock, so tests can pass their own.
  * @param {Object} request - From parseApiRequest.
- * @param {{password: string, cache: Object}} deps
+ * @param {{password: string, cache: Object, loginLock: Object}} deps
  * @returns {Object}
  */
 function handleApiRequest(request, deps) {
   if (request.action === 'login') {
-    return Object.assign({ ok: true }, apiLogin(request.args.name, request.args.password, deps.password, deps.cache));
+    // Without the lock, parallel tries all read the same failure count and the limit of ten is lost.
+    if (!deps.loginLock.tryLock(API.LOGIN_WAIT_MS)) throw _authError('الدخول مشغول الآن؛ أعد المحاولة بعد لحظة.');
+    try {
+      return Object.assign({ ok: true }, apiLogin(request.args.name, request.args.password, deps.password, deps.cache));
+    } finally {
+      deps.loginLock.releaseLock();
+    }
   }
   const name = apiSession(request.token, deps.password, deps.cache);
   if (request.action === 'data') return { ok: true, data: getDashboardData(request.year, request.test) };
@@ -164,6 +175,7 @@ function _sameDigest(a, b) {
  * @returns {{token: string, name: string}}
  */
 function apiLogin(name, password, configured, cache) {
+  configured = String(configured || '').trim();
   const who = String(name || '').replace(/\s+/g, ' ').trim();
   if (!configured) throw _authError('لم تُضبط كلمة مرور اللوحة بعد.');
   if (cache.get(API.LOCK_KEY)) throw _authError('أُقفل الدخول ربع ساعة بعد محاولات خاطئة كثيرة.');
@@ -192,6 +204,7 @@ function apiLogin(name, password, configured, cache) {
  * @returns {string}
  */
 function apiSession(token, configured, cache) {
+  configured = String(configured || '').trim();
   const raw = token && configured ? cache.get(API.SESSION_PREFIX + token) : null;
   let session = null;
   try { session = raw ? JSON.parse(raw) : null; } catch (e) { session = null; }
