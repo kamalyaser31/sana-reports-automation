@@ -736,6 +736,43 @@ function _testPublicStats() {
   });
 }
 
+// ─── سنة الميلاد والهاتف (S-32، S-33) ───────────────────────────────────────
+
+function _testStudentDetails() {
+  _suite('student details (birth year, phone)', () => {
+    const today = new Date(2026, 9, 24);
+    const throws = fn => { try { fn(); return false; } catch (e) { return true; } };
+    _eq(normalizeBirthYear('٢٠١٥', today), 2015, 'eastern digits birth year');
+    _eq(normalizeBirthYear(' ', today), '', 'empty clears');
+    _ok(throws(() => normalizeBirthYear('15', today)), 'two digits refused');
+    _ok(throws(() => normalizeBirthYear('2030', today)), 'future year refused');
+    _ok(throws(() => normalizeBirthYear('1900', today)), 'before 1930 refused');
+    _eq(normalizePhone('0020 100-123 4567'), '+201001234567', '00 prefix, spaces and dashes');
+    _eq(normalizePhone('+49 (151) 234 5678'), '+491512345678', 'brackets dropped');
+    _eq(normalizePhone('+٢٠١٠٠١٢٣٤٥٦٧'), '+201001234567', 'eastern digits phone');
+    _eq(normalizePhone(''), '', 'empty clears');
+    _ok(throws(() => normalizePhone('01001234567')), 'no country code refused');
+    _ok(throws(() => normalizePhone('+2010')), 'too short refused');
+    _eq(ageFromBirthYear(2015, today), 11, 'age from birth year');
+    _eq(ageFromBirthYear('', today), '', 'no birth year → no age');
+
+    _section('الأعمدة بالعنوان');
+    const header = REGISTRY.STUDENT_HEADERS.concat(['ملاحظة', 'رقم الهاتف', 'سنة الميلاد']);
+    _eq(studentDetailColumns(header), { birthYear: 2, phone: 1 }, 'found by header after other admin columns');
+    _eq(studentDetailColumns(REGISTRY.STUDENT_HEADERS), { birthYear: -1, phone: -1 }, 'missing → -1');
+    _eq(copyStudentDetails([2015, '+201001234567'], { birthYear: 0, phone: 1 }, ['متابعة'], { birthYear: 2, phone: 1 }),
+      ['متابعة', '+201001234567', 2015], 'copied to new positions, other admin cell kept');
+    _eq(copyStudentDetails(['', ''], { birthYear: 0, phone: 1 }, ['x'], { birthYear: 0, phone: 1 }), ['x'],
+      'empty values copy nothing');
+
+    _section('الدمج يملأ الفارغ ولا يكتب فوق القائم');
+    const base = { slots: {}, firstHifz: '', firstHifzDate: null, lastHifz: '', lastHifzDate: null };
+    const wrong = Object.assign({}, base, { key: 'a', extra: ['', '+201001234567', 2015] });
+    const right = Object.assign({}, base, { key: 'b', extra: ['متابعة', '', 2014] });
+    _eq(mergeStudentRecords(wrong, right).extra, ['متابعة', '+201001234567', 2014], 'phone filled, birth year kept');
+  });
+}
+
 // ─── لوحة الإدارة (Dashboard.js) ─────────────────────────────────────────────
 
 /** يتحقق أن لا Date في الكائن، لأن google.script.run يرفضها. */
@@ -761,6 +798,12 @@ function _testDashboard() {
     _eq(d.aliases, [{ teacher: 'محمد نبيل', from: 'حمزه عالء', to: 'حمزة علاء', applied: false }], 'aliases listed');
     _eq(d.expenses.map(e => e.month), ['2026-10', '2026-08'], 'expense rows listed');
     _ok(d.currencies.indexOf('EGP') !== -1, 'currency list sent');
+    const withDetails = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, {
+      teachers: [{ name: 'أسماء علي', code: 'T002', detailCols: { birthYear: 0, phone: 1 },
+        students: [Object.assign({}, input.teachers[0].students[0], { extra: [2015, '+201001234567'] })] }],
+    }));
+    _eq(['birthYear', 'age', 'phone'].map(f => withDetails.teachers[0].students[0][f]), [2015, 11, '+201001234567'],
+      'birth year, age and phone shown');
     _has(_friendlyError(new Error('Exception: You do not have permission to access the requested document.')).message,
       'ليس لك حق التعديل', 'permission error explained in Arabic');
     _eq(_friendlyError(new Error('اختر المعلم والاسمين.')).message, 'اختر المعلم والاسمين.', 'own messages kept');
@@ -802,6 +845,7 @@ function runAllUnitTests() {
   _testRegistryRows();
   _testPublicStats();
   _testDashboard();
+  _testStudentDetails();
 
   _report('UNIT TESTS');
 }
@@ -1092,6 +1136,52 @@ function integrationTest_Dashboard() {
   }
 }
 
+/**
+ * اختبار تكاملي — سنة الميلاد والهاتف: تُكتب من اللوحة في سجل 2025، ثم تنتقل
+ * إلى سجل 2026 حين يظهر الطالب فيه أول مرة، ولا يظهر الهاتف في الملف العام.
+ */
+function integrationTest_StudentDetails() {
+  const tag = String(Date.now()).slice(-6);
+  const teacher = 'سمية حمدي';
+  const student = `يوسف ${tag}`;
+  const phone = `+2010${tag}99`;
+  const submit = date => _runIntegrationSubmission({
+    'اسم المعلم': teacher, 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '0',
+    'التقرير': _buildTestReport(date, 'صباحية', 1, `${tag}7`, _sampleStudentText([{ name: student }])),
+    'ملاحظات خاصة للإدارة': '',
+  });
+  const find = (data) => data.teachers.find(t => t.name === teacher).students
+    .find(s => s.key === studentNameKey(student));
+
+  submit('20-12-2025');
+  _TEST_MODE = true;
+  try {
+    const saved = dashboardSetDetails(teacher, studentNameKey(student), { birthYear: '٢٠١٦', phone: `00${phone.slice(1)}` }, '2025');
+    _eq([find(saved).birthYear, find(saved).phone], [2016, phone], 'details saved and normalized');
+    let err = '';
+    try { dashboardSetDetails(teacher, studentNameKey(student), { birthYear: '2016', phone: '0100' }, '2025'); }
+    catch (e) { err = e.message; }
+    _has(err, 'مفتاح الدولة', 'bad phone explained');
+  } finally {
+    _TEST_MODE = false;
+  }
+
+  submit('05-01-2026');
+  _TEST_MODE = true;
+  try {
+    const next = getDashboardData('2026');
+    _eq([find(next).birthYear, find(next).phone], [2016, phone], 'details carried into the new year');
+    refreshPublicStats('2026');
+    const ss = SpreadsheetApp.openById(_firstNotTrashed(
+      getRootFolder().getFoldersByName('2026').next().getFilesByName(`${PUBLIC_STATS.FILE_PREFIX} 2026`)).getId());
+    const cells = _readBody(ss.getSheetByName(PUBLIC_STATS.TOTALS_TAB))
+      .concat(_readBody(ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB)));
+    _ok(!cells.some(r => r.some(v => String(v).indexOf(tag) !== -1)), 'no phone in the public file');
+  } finally {
+    _TEST_MODE = false;
+  }
+}
+
 // ============================================================================
 // ⑤ المُشغِّل الكامل
 // ============================================================================
@@ -1117,6 +1207,7 @@ function runAllTests() {
   _suite('Integration: StudentsRegistry',            integrationTest_StudentsRegistry);
   _suite('Integration: PublicStats',                 integrationTest_PublicStats);
   _suite('Integration: Dashboard',                   integrationTest_Dashboard);
+  _suite('Integration: StudentDetails',              integrationTest_StudentDetails);
   _report('INTEGRATION TESTS');
 
   console.log(`\nSUMMARY — Unit: ${unitPass}P/${unitFail}F | Integration: ${_T.pass}P/${_T.fail}F`);

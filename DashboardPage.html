@@ -103,6 +103,7 @@
             <th scope="col">الاسم</th><th scope="col">الجنس</th><th scope="col">الفئة</th>
             <th scope="col">أول ظهور</th><th scope="col">آخر ظهور</th><th scope="col">الحضور</th>
             <th scope="col">آخر حفظ</th><th scope="col">الإعادة</th><th scope="col">الأوسمة</th>
+            <th scope="col">السن</th><th scope="col">سنة الميلاد والهاتف</th>
           </tr></thead>
           <tbody>
             <template x-for="s in filteredStudents()" :key="s.key">
@@ -110,17 +111,30 @@
                 <th scope="row"><span x-text="s.name"></span><span x-show="s.isNew"> (جديد)</span></th>
                 <td>
                   <label :for="'g-' + s.key" class="sr-only" x-text="'جنس ' + s.name"></label>
-                  <select :id="'g-' + s.key" x-model="genders[s.key]" class="border border-gray-700 p-1">
+                  <select :id="'g-' + s.key" x-model="genders[k(s)]" class="border border-gray-700 p-1">
                     <option value="ذكر">ذكر</option><option value="أنثى">أنثى</option>
                   </select>
                   <button type="button" class="border border-gray-900 px-2 ms-1 disabled:opacity-50"
-                          :disabled="busy || genders[s.key] === s.gender"
+                          :disabled="busy || genders[k(s)] === s.gender"
                           :aria-label="'احفظ جنس ' + s.name"
                           @click="saveGender(s)">احفظ</button>
                 </td>
                 <td x-text="s.category"></td><td x-text="s.firstSeen"></td><td x-text="s.lastSeen"></td>
                 <td x-text="s.attendance"></td><td x-text="s.lastHifz"></td>
                 <td x-text="s.repeats"></td><td x-text="s.medals"></td>
+                <td x-text="s.age === '' ? '' : s.age + ' سنة'"></td>
+                <td>
+                  <label :for="'by-' + s.key" class="sr-only" x-text="'سنة ميلاد ' + s.name"></label>
+                  <input :id="'by-' + s.key" type="text" inputmode="numeric" maxlength="4" placeholder="سنة الميلاد"
+                         x-model="details[k(s)].birthYear" class="border border-gray-700 p-1 w-24">
+                  <label :for="'ph-' + s.key" class="sr-only" x-text="'هاتف ' + s.name"></label>
+                  <input :id="'ph-' + s.key" type="tel" dir="ltr" placeholder="+20…"
+                         x-model="details[k(s)].phone" class="border border-gray-700 p-1 w-40">
+                  <button type="button" class="border border-gray-900 px-2 ms-1 disabled:opacity-50"
+                          :disabled="busy || !detailsChanged(s)"
+                          :aria-label="'احفظ سنة ميلاد وهاتف ' + s.name"
+                          @click="saveDetails(s)">احفظ</button>
+                </td>
               </tr>
             </template>
           </tbody>
@@ -241,6 +255,7 @@
     return {
       data: null, status: 'جارٍ تحميل البيانات…', error: '', busy: false, year: '', test: false,
       month: '', teacher: '', search: '', genders: {},
+      details: {},
       aliasFrom: '', aliasMode: 'list', aliasToList: '', aliasToTyped: '', review: null, pendingDelete: -1,
       expMonth: '', expAmount: '', expCurrency: 'EGP',
 
@@ -278,7 +293,11 @@
       load(data) {
         this.data = data;
         this.genders = {};
-        data.teachers.forEach(t => t.students.forEach(s => { this.genders[s.key] = s.gender; }));
+        this.details = {};
+        data.teachers.forEach(t => t.students.forEach(s => {
+          this.genders[t.name + '|' + s.key] = s.gender;
+          this.details[t.name + '|' + s.key] = { birthYear: String(s.birthYear || ''), phone: s.phone || '' };
+        }));
         if (!data.teachers.some(t => t.name === this.teacher)) this.teacher = data.teachers.length ? data.teachers[0].name : '';
         const months = this.months();
         if (months.indexOf(this.month) === -1) this.month = months.length ? months[months.length - 1] : '';
@@ -305,9 +324,23 @@
         if (el) el.focus();
       },
 
+      // Per teacher and student: two teachers may each have a student of the same name.
+      k(s) {
+        return this.teacher + '|' + s.key;
+      },
+      detailsChanged(s) {
+        const d = this.details[this.k(s)];
+        return !!d && (d.birthYear.trim() !== String(s.birthYear || '') || d.phone.trim() !== (s.phone || ''));
+      },
+      saveDetails(s) {
+        const d = this.details[this.k(s)];
+        this.call('dashboardSetDetails', [this.teacher, s.key, { birthYear: d.birthYear, phone: d.phone }, this.year],
+          'حُفظت سنة ميلاد ' + s.name + ' وهاتفه.');
+      },
+
       saveGender(s) {
-        this.call('dashboardSetGender', [this.teacher, s.key, this.genders[s.key], this.year],
-          'حُفظ جنس ' + s.name + ': ' + this.genders[s.key] + '.');
+        this.call('dashboardSetGender', [this.teacher, s.key, this.genders[this.k(s)], this.year],
+          'حُفظ جنس ' + s.name + ': ' + this.genders[this.k(s)] + '.');
       },
 
       aliasTo() {

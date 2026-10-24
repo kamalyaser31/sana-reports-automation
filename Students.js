@@ -309,13 +309,19 @@ function _recordHifz(student, hifz, date) {
 
 /**
  * Merges the wrong row into the correct one: slots are united, so a halaqa in
- * both rows counts once; gender and admin cells come from the correct row.
+ * both rows counts once; gender and admin cells come from the correct row,
+ * and an admin cell left empty there is filled from the wrong row, so a phone
+ * typed on the misspelt row is not lost.
  * @param {Object} wrong
  * @param {Object} right
  * @returns {Object}
  */
 function mergeStudentRecords(wrong, right) {
   const merged = _cloneStudent(right);
+  (wrong.extra || []).forEach((v, i) => {
+    if ((merged.extra[i] === '' || merged.extra[i] === undefined) && v !== '') merged.extra[i] = v;
+  });
+  for (let i = 0; i < merged.extra.length; i++) if (merged.extra[i] === undefined) merged.extra[i] = '';
   Object.keys(wrong.slots).forEach(k => {
     if (!merged.slots[k]) merged.slots[k] = wrong.slots[k].slice();
   });
@@ -488,12 +494,181 @@ function recordStudents(yearFolder, data) {
   const ss = getOrCreateRegistry(yearFolder, data.submissionYear);
   const aliases = rowsToAliases(_readBody(ss.getSheetByName(REGISTRY.ALIASES_TAB)));
   const sheet = _getOrCreateTeacherTab(ss, report.teacher);
+  _ensureDetailColumns(sheet);
   const current = readStudentsTab(sheet);
 
   const result = applyReportToStudents(current.students, report, buildAliasMap(aliases));
+  const known = new Set(current.students.map(s => s.key));
+  const created = result.students.filter(s => !known.has(s.key));
+  if (created.length) _carryDetailsFromLastYear(sheet, created, report.teacher, data.submissionYear);
   writeStudentsTab(sheet, result.students, current.orphans);
   _appendHalaqaOnce(ss.getSheetByName(REGISTRY.HALAQAT_TAB), buildHalaqaRow(report, result.counted));
   return { newStudents: result.newStudents, counted: result.counted };
+}
+
+/**
+ * A student's first row of a new year takes their birth year and phone from
+ * last year's registry, same teacher and key (S-33). Mutates `created`, which
+ * are the caller's own fresh records.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Array<Object>} created
+ * @param {string} teacher
+ * @param {string} year
+ */
+function _carryDetailsFromLastYear(sheet, created, teacher, year) {
+  const previous = _findRegistry(String(Number(year) - 1));
+  const lastTab = previous && previous.getSheetByName(_teacherTabName(teacher));
+  if (!lastTab) return;
+  const lastCols = studentDetailColumns(_headerRow(lastTab));
+  const lastByKey = {};
+  readStudentsTab(lastTab).students.forEach(s => { lastByKey[s.key] = s; });
+  const cols = studentDetailColumns(_headerRow(sheet));
+  created.forEach(s => {
+    const old = lastByKey[s.key];
+    if (old) s.extra = copyStudentDetails(old.extra, lastCols, s.extra, cols);
+  });
+}
+
+// ============================================================================
+// 6-أ. STUDENT DETAILS: birth year and phone (S-32)
+// ============================================================================
+
+const STUDENT_DETAIL_HEADERS = { birthYear: 'سنة الميلاد', phone: 'رقم الهاتف' };
+
+/**
+ * Where the detail columns sit among the admin cells (0-based index into a
+ * record's `extra`), found by header text, so other admin columns may come
+ * before or after them.
+ * @param {Array} headerRow
+ * @returns {{ birthYear: number, phone: number }} -1 when a column is missing.
+ */
+function studentDetailColumns(headerRow) {
+  const admin = (headerRow || []).slice(STUDENT_SYSTEM_COLUMNS).map(v => String(v).trim());
+  return {
+    birthYear: admin.indexOf(STUDENT_DETAIL_HEADERS.birthYear),
+    phone:     admin.indexOf(STUDENT_DETAIL_HEADERS.phone),
+  };
+}
+
+/**
+ * Copies birth year and phone from one record's admin cells into another's,
+ * leaving every other admin cell alone.
+ * @param {Array} fromExtra
+ * @param {{birthYear: number, phone: number}} fromCols
+ * @param {Array} toExtra
+ * @param {{birthYear: number, phone: number}} toCols
+ * @returns {Array} New admin cells.
+ */
+function copyStudentDetails(fromExtra, fromCols, toExtra, toCols) {
+  const out = (toExtra || []).slice();
+  ['birthYear', 'phone'].forEach(f => {
+    if (fromCols[f] < 0 || toCols[f] < 0) return;
+    const v = (fromExtra || [])[fromCols[f]];
+    if (v === '' || v === undefined || v === null) return;
+    while (out.length <= toCols[f]) out.push('');
+    out[toCols[f]] = v;
+  });
+  return out;
+}
+
+/**
+ * A birth year as a number, or '' to clear it.
+ * @param {*} value
+ * @param {Date} today
+ * @returns {number|string}
+ */
+function normalizeBirthYear(value, today) {
+  const clean = normalizeDigitsAndText(String(value === undefined || value === null ? '' : value)).trim();
+  if (!clean) return '';
+  const year = Number(clean);
+  if (!/^\d{4}$/.test(clean) || year < 1930 || year > today.getFullYear()) {
+    throw new Error(`سنة الميلاد أربعة أرقام بين 1930 و${today.getFullYear()}.`);
+  }
+  return year;
+}
+
+/**
+ * A phone in international form "+<digits>", or '' to clear it. Spaces,
+ * dashes and brackets are dropped; "00" in front becomes "+".
+ * @param {*} value
+ * @returns {string}
+ */
+function normalizePhone(value) {
+  let clean = normalizeDigitsAndText(String(value === undefined || value === null ? '' : value))
+    .replace(/[\s\-().‎‏]/g, '');
+  if (!clean) return '';
+  if (clean.indexOf('00') === 0) clean = '+' + clean.substring(2);
+  if (!/^\+\d{8,15}$/.test(clean)) {
+    throw new Error('اكتب الهاتف بمفتاح الدولة، مثل +201001234567، من 8 إلى 15 رقماً.');
+  }
+  return clean;
+}
+
+/**
+ * The age a student reaches this year, from the birth year.
+ * @param {*} birthYear
+ * @param {Date} today
+ * @returns {number|string} '' when unknown.
+ */
+function ageFromBirthYear(birthYear, today) {
+  const y = Number(birthYear);
+  return y ? today.getFullYear() - y : '';
+}
+
+/**
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @returns {Array}
+ */
+function _headerRow(sheet) {
+  const lastCol = sheet.getLastColumn();
+  return lastCol ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+}
+
+/**
+ * Adds the detail headers to a tab that lacks them (tabs made before S-32),
+ * after the last column, so existing admin columns keep their place.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @returns {{ birthYear: number, phone: number }}
+ */
+function _ensureDetailColumns(sheet) {
+  const header = _headerRow(sheet);
+  let width = Math.max(header.length, STUDENT_SYSTEM_COLUMNS);
+  const cols = studentDetailColumns(header);
+  ['birthYear', 'phone'].forEach(f => {
+    if (cols[f] !== -1) return;
+    width++;
+    sheet.getRange(1, width).setValue(STUDENT_DETAIL_HEADERS[f]).setFontWeight('bold');
+  });
+  return studentDetailColumns(_headerRow(sheet));
+}
+
+/**
+ * Saves a student's birth year and phone (S-32), found by key in column M.
+ * Empty values clear the cell.
+ * @param {string} teacher
+ * @param {string} key
+ * @param {{birthYear: *, phone: *}} details
+ * @param {string} [year]
+ * @returns {{ birthYear: number|string, phone: string }} What was written.
+ */
+function setStudentDetails(teacher, key, details, year) {
+  const birthYear = normalizeBirthYear(details.birthYear, new Date());
+  const phone = normalizePhone(details.phone);
+  return _withScriptLock(() => {
+    const sheet = _registryOrThrow(year).getSheetByName(_teacherTabName(teacher));
+    if (!sheet) throw new Error(`لا تبويب للمعلم «${teacher}» في السجل.`);
+    const cols = _ensureDetailColumns(sheet);
+    const index = _readBody(sheet).findIndex(r => {
+      const s = rowToStudent(r);
+      return s && s.key === key;
+    });
+    if (index === -1) throw new Error('لم يوجد الطالب؛ لعل صفه دُمج. حدّث الصفحة.');
+    const row = index + 2;
+    sheet.getRange(row, STUDENT_SYSTEM_COLUMNS + 1 + cols.birthYear).setValue(birthYear);
+    // Text, or Sheets reads "+20…" as a number and drops the plus sign.
+    sheet.getRange(row, STUDENT_SYSTEM_COLUMNS + 1 + cols.phone).setNumberFormat('@').setValue(phone);
+    return { birthYear, phone };
+  });
 }
 
 /**
@@ -593,7 +768,8 @@ function _getOrCreateTeacherTab(ss, teacher) {
   const existing = ss.getSheetByName(name);
   if (existing) return existing;
   const sheet = ss.insertSheet(name, 0);
-  _styleHeader(sheet, REGISTRY.STUDENT_HEADERS);
+  _styleHeader(sheet, REGISTRY.STUDENT_HEADERS.concat(
+    [STUDENT_DETAIL_HEADERS.birthYear, STUDENT_DETAIL_HEADERS.phone]));
   sheet.hideColumns(STUDENT_SYSTEM_COLUMNS);
   return sheet;
 }

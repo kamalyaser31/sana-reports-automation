@@ -8,8 +8,8 @@
  * Google account" (appsscript.json "webapp"). So every read and write runs with
  * the visitor's own Drive permissions: whoever was not given the academy
  * folders sees nothing, and a viewer cannot write (S-27).
- * It shows everything and writes three things only: aliases (S-12), expenses
- * (S-25) and gender (S-11). Dates cross google.script.run as "yyyy-mm-dd"
+ * It shows everything and writes four things only: aliases (S-12), expenses
+ * (S-25), gender (S-11), and birth year with phone (S-32). Dates cross google.script.run as "yyyy-mm-dd"
  * strings, because Date objects are not allowed there.
  * ============================================================================
  */
@@ -78,12 +78,17 @@ function buildDashboardData(input) {
     teachers: input.teachers.map(t => ({
       name: t.name,
       students: sortStudentsByLastSeen(t.students).map(s => {
+        const cols = t.detailCols || { birthYear: -1, phone: -1 };
+        const birthYear = cols.birthYear >= 0 ? (s.extra[cols.birthYear] || '') : '';
         const st = deriveStudentStats(s.slots);
         const firstSeen = _dayOrBlank(st.firstSeen);
         return {
           key: s.key, name: s.name, gender: s.gender, category: st.category,
           firstSeen, lastSeen: _dayOrBlank(st.lastSeen), attendance: st.attendance,
           lastHifz: s.lastHifz, repeats: st.repeats, medals: st.medals,
+          birthYear: birthYear === '' ? '' : Number(birthYear),
+          age: ageFromBirthYear(birthYear, input.today),
+          phone: cols.phone >= 0 ? String(s.extra[cols.phone] || '') : '',
           isNew: firstSeen >= newFrom,
         };
       }),
@@ -154,6 +159,7 @@ function _getDashboardData(year) {
         name: sh.getName(),
         code: _resolveTeacher({ rawTeacherName: sh.getName() }, []).teacherId,
         students: readStudentsTab(sh).students,
+        detailCols: studentDetailColumns(_headerRow(sh)),
       }));
     const publicFile = _findPublicFile(y);
     return buildDashboardData({
@@ -216,6 +222,26 @@ function dashboardSetGender(teacher, key, gender, year, test) {
   return _withMode(test, () => {
     try {
       setStudentGender(teacher, key, gender, year);
+      return _getDashboardData(year);
+    } catch (error) {
+      throw _friendlyError(error);
+    }
+  });
+}
+
+/**
+ * Saves a student's birth year and phone (S-32).
+ * @param {string} teacher
+ * @param {string} key
+ * @param {{birthYear: *, phone: *}} details
+ * @param {string} year
+ * @param {boolean} [test]
+ * @returns {Object} Fresh dashboard data.
+ */
+function dashboardSetDetails(teacher, key, details, year, test) {
+  return _withMode(test, () => {
+    try {
+      setStudentDetails(teacher, key, details, year);
       return _getDashboardData(year);
     } catch (error) {
       throw _friendlyError(error);
