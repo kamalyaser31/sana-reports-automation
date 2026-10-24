@@ -1097,13 +1097,15 @@ function integrationTest_PublicStats() {
     try { saveTeacherRate(teachers[0], '0'); } catch (e) { refused = e.message; }
     _ok(refused !== '', 'zero rate refused');
 
-    _ok(refreshPublicStats('2026'), 'public file refreshed');
+    // A day when September is still open, so its rows are recomputed, not kept frozen.
+    const openDay = new Date(2026, 9, 1);
+    _ok(refreshPublicStats('2026', openDay), 'public file refreshed');
     const ss = SpreadsheetApp.openById(_firstNotTrashed(
       getRootFolder().getFoldersByName('2026').next().getFilesByName(`${PUBLIC_STATS.FILE_PREFIX} 2026`)).getId());
     const legacy = ss.getSheetByName(PUBLIC_STATS.LEGACY_TAB);
     if (legacy.getLastRow() < 2) legacy.appendRow(['2026-08', PUBLIC_STATS.ACADEMY, 1, 1, 1, 1, 0, 0, 1, 1, 1]);
     const legacyBefore = JSON.stringify(_readBody(legacy));
-    refreshPublicStats('2026');
+    refreshPublicStats('2026', openDay);
     _eq(JSON.stringify(_readBody(legacy)), legacyBefore, '«قبل النظام» unchanged by the refresh');
 
     const cells = _readBody(ss.getSheetByName(PUBLIC_STATS.TOTALS_TAB))
