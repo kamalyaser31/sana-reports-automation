@@ -7,3 +7,7 @@ Thumbs.db
 # Local secrets — contains sensitive credentials, never commit this file.
 # Copy Config.local.example.js → Config.local.js and fill in your values.
 Config.local.js
+
+# legacy_stats.py output (aggregate numbers, pasted once into the public file)
+legacy_stats.csv
+__pycache__/

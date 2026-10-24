@@ -1,6 +1,6 @@
 # حالة المشروع (Project State) — sana-reports-automation
 
-**الإصدار:** `5.2.2` (مرفوع بـ `clasp push` ومدموج في `master` محلياً؛ لم يُدفع إلى GitHub)  
+**الإصدار:** `5.3.0` في فرع `feat/students-registry` (M1–M4؛ السجل مطفأ حتى يوم التثبيت). و`master` على `5.2.2`، ولم يُدفع شيء إلى GitHub.
 **تاريخ التحديث:** `2026-10-24`  
 **المستودع:** `https://github.com/kamalyaser31/sana-reports-automation` (خاص - Private)  
 **الحالة:** في 5.2.2 ثلاثة إصلاحات بأجنحة اختبارها: التاريخ الملتصق بالشهر، ومعرّف المعلم غير المسجّل (hash للاسم كله)، ورقم الحلقة في سطر Telegram. ونجح `runAllUnitTests` في المحرر (138 اختباراً، 2026-10-24).

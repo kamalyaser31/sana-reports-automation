@@ -380,7 +380,9 @@ function _getOrCreatePublicFile(yearFolder, year) {
   _styleHeader(monthly, PUBLIC_STATS.MONTHLY_HEADERS);
   // The month stays text, or Sheets turns "2026-10" into a date.
   monthly.getRange('A:A').setNumberFormat('@');
-  _styleHeader(ss.insertSheet(PUBLIC_STATS.LEGACY_TAB), PUBLIC_STATS.LEGACY_HEADERS);
+  const legacy = ss.insertSheet(PUBLIC_STATS.LEGACY_TAB);
+  _styleHeader(legacy, PUBLIC_STATS.LEGACY_HEADERS);
+  legacy.getRange('A:A').setNumberFormat('@');
   return ss;
 }
 
