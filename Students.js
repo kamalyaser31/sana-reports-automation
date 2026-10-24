@@ -460,6 +460,20 @@ function rowsToAliases(values) {
 }
 
 /**
+ * Reads «سجل التعديلات» values, newest first, as plain objects for the page.
+ * @param {Array<Array>} values
+ * @param {number} [limit]
+ * @returns {Array<{time: string, name: string, action: string, details: string}>}
+ */
+function rowsToEditLog(values, limit) {
+  const pad = n => String(n).padStart(2, '0');
+  const stamp = d => (d instanceof Date ? `${_isoDay(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}` : String(d || ''));
+  return (values || []).filter(v => v[1] || v[2])
+    .map(v => ({ time: stamp(v[0]), name: String(v[1] || ''), action: String(v[2] || ''), details: String(v[3] || '') }))
+    .reverse().slice(0, limit || 200);
+}
+
+/**
  * Reads «أسعار الساعة» values into teacher tab name → rate (S-34); a blank or
  * non-positive cell is no rate.
  * @param {Array<Array>} values
@@ -485,6 +499,7 @@ const REGISTRY = {
   EXPENSES_TAB: 'المصروفات',
   HALAQAT_TAB:  'الحلقات',
   RATES_TAB:    'أسعار الساعة',
+  LOG_TAB:      'سجل التعديلات',
   DATE_FORMAT:  'dd-mm-yyyy',
   STUDENT_HEADERS: [
     'اسم الطالب', 'الجنس', 'فئة الطلاب', 'أول ظهور', 'آخر ظهور', 'عدد مرات الحضور',
@@ -494,6 +509,7 @@ const REGISTRY = {
   ALIAS_HEADERS:   ['المعلم', 'الاسم كما ورد', 'الاسم الصحيح', 'تاريخ التطبيق'],
   EXPENSE_HEADERS: ['الشهر', 'المبلغ', 'العملة'],
   RATE_HEADERS:    ['المعلم', 'السعر'],
+  LOG_HEADERS:     ['الوقت', 'الاسم', 'الفعل', 'التفاصيل'],
   HALAQA_HEADERS:  ['report_id', 'التاريخ', 'المعلم', 'الفترة', 'رقم الحلقة', 'الفئة',
     'المدة بالدقائق', 'الطلاب المحسوبون'],
 };
@@ -756,12 +772,33 @@ function _getOrCreateRatesTab(ss) {
 }
 
 /**
+ * Adds one row to the hidden «سجل التعديلات» of a year's registry (S-44),
+ * creating the tab on first use.
+ * @param {string} year
+ * @param {string} name - As typed by the admin at login.
+ * @param {string} action
+ * @param {string} details
+ */
+function appendEditLog(year, name, action, details) {
+  const ss = _registryOrThrow(year);
+  let sheet = ss.getSheetByName(REGISTRY.LOG_TAB);
+  if (!sheet) {
+    sheet = ss.insertSheet(REGISTRY.LOG_TAB);
+    _styleHeader(sheet, REGISTRY.LOG_HEADERS);
+    sheet.hideSheet();
+  }
+  sheet.appendRow([new Date(), name, action, details]);
+  sheet.getRange(sheet.getLastRow(), 1).setNumberFormat('dd-mm-yyyy hh:mm');
+}
+
+/**
  * The registry's teacher tabs: every tab but the reserved ones.
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} ss
  * @returns {GoogleAppsScript.Spreadsheet.Sheet[]}
  */
 function registryTeacherSheets(ss) {
-  const reserved = [REGISTRY.ALIASES_TAB, REGISTRY.EXPENSES_TAB, REGISTRY.HALAQAT_TAB, REGISTRY.RATES_TAB];
+  const reserved = [REGISTRY.ALIASES_TAB, REGISTRY.EXPENSES_TAB, REGISTRY.HALAQAT_TAB, REGISTRY.RATES_TAB,
+    REGISTRY.LOG_TAB];
   return ss.getSheets().filter(sh => reserved.indexOf(sh.getName()) === -1);
 }
 

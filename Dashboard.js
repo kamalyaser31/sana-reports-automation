@@ -1,33 +1,19 @@
 /**
  * ============================================================================
- * Dashboard.js — Admin dashboard web app (M5)
+ * Dashboard.js — Admin dashboard data and writes (M5, S-38)
  * ============================================================================
- * Served by doGet() from DashboardPage.html (Apps Script refuses two files named
- * "Dashboard", even of different types) as a Web App deployed with
- * "Execute as: User accessing the web app" and "Who has access: Anyone with
- * Google account" (appsscript.json "webapp"). So every read and write runs with
- * the visitor's own Drive permissions: whoever was not given the academy
- * folders sees nothing, and a viewer cannot write (S-27).
+ * The page is served from GitHub Pages and reaches these functions only through
+ * doPost in Api.js, after the password check. They run as the script owner.
  * It shows everything and writes five things only: aliases (S-12), expenses
  * (S-25), gender (S-11), birth year with phone (S-32), and hourly rates (S-34).
- * Teachers' pay is shown here and nowhere else (S-35). Dates cross
- * google.script.run as "yyyy-mm-dd" strings, because Date objects are not allowed there.
+ * Teachers' pay is shown here and nowhere else (S-35). Dates leave as
+ * "yyyy-mm-dd" strings, because the page reads JSON.
  * ============================================================================
  */
 
 const DASHBOARD = {
-  TITLE:       'لوحة إدارة أكاديمية سنا',
   NEW_DAYS:    14,
 };
-
-/**
- * @returns {GoogleAppsScript.HTML.HtmlOutput}
- */
-function doGet() {
-  return HtmlService.createHtmlOutputFromFile('DashboardPage')
-    .setTitle(DASHBOARD.TITLE)
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
-}
 
 // ============================================================================
 // 1. PURE SHAPING (unit-tested)
@@ -47,6 +33,7 @@ function _dayOrBlank(value) {
  * @param {Array<Array>} input.halaqat
  * @param {Array<Array>} input.expenses
  * @param {Array<Array>} [input.rates] - «أسعار الساعة» values.
+ * @param {Array<Array>} [input.log]   - «سجل التعديلات» values.
  * @param {Array<Array>} input.aliases - «الأسماء البديلة» values.
  * @param {Array<Array>} input.legacy
  * @param {Date} input.today
@@ -98,6 +85,7 @@ function buildDashboardData(input) {
         };
       }),
     })).sort((a, b) => (a.name > b.name ? 1 : -1)),
+    log: rowsToEditLog(input.log),
     aliases: rowsToAliases(input.aliases).map(a => ({
       teacher: a.teacher, from: a.from, to: a.to, applied: a.applied,
     })),
@@ -121,7 +109,7 @@ function _friendlyError(error) {
 }
 
 // ============================================================================
-// 2. CALLS FROM THE PAGE (google.script.run)
+// 2. CALLS FROM THE API (Api.js)
 // ============================================================================
 
 /**
@@ -172,6 +160,7 @@ function _getDashboardData(year) {
         .map(r => [r[0], r[1], _teacherTabName(r[2])].concat(r.slice(3))),
       expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
       rates: _readBody(registry.getSheetByName(REGISTRY.RATES_TAB)),
+      log: _readBody(registry.getSheetByName(REGISTRY.LOG_TAB)),
       aliases: _readBody(registry.getSheetByName(REGISTRY.ALIASES_TAB)),
       legacy: publicFile ? _readBody(publicFile.getSheetByName(PUBLIC_STATS.LEGACY_TAB)) : [],
       today: new Date(),

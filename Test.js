@@ -844,6 +844,60 @@ function _testDashboard() {
  * يشغّل جميع اختبارات الوحدة (لا يتصل بـ Drive/Sheets).
  * الوقت المتوقع: 2–4 ثوانٍ.
  */
+// ─── واجهة اللوحة (Api.js) ──────────────────────────────────────────────────
+
+/** ذاكرة مؤقتة في الذاكرة بواجهة CacheService (get/put/remove). */
+function _memoryCache() {
+  const store = {};
+  return { get: k => (k in store ? store[k] : null), put: (k, v) => { store[k] = v; }, remove: k => { delete store[k]; } };
+}
+
+function _testApi() {
+  _suite('dashboard API (Api.js)', () => {
+    const throws = fn => { try { fn(); return ''; } catch (e) { return e.auth ? 'auth' : 'error'; } };
+    _section('قراءة الطلب');
+    _eq(throws(() => parseApiRequest('{')), 'error', 'malformed JSON refused');
+    _eq(throws(() => parseApiRequest('{"action":"_getSecret"}')), 'error', 'unknown action refused');
+    _eq(throws(() => parseApiRequest('{"action":"data","year":"26"}')), 'error', 'bad year refused');
+    const req = parseApiRequest(JSON.stringify({ action: 'saveRate', token: 't', test: true, year: '2026',
+      args: { teacher: ' سمية ', rate: 50, extra: { a: 1 } } }));
+    _eq(req, { action: 'saveRate', token: 't', test: true, year: '2026', args: { teacher: 'سمية', rate: '50' } },
+      'args trimmed, control characters and objects dropped');
+    _eq(parseApiRequest('{"action":"data","test":"true"}').test, false, 'test mode only for a real true');
+
+    _section('كلمة المرور والجلسة');
+    const cache = _memoryCache();
+    _eq(throws(() => apiLogin('أحمد', 'x', '', cache)), 'auth', 'no configured password → no login');
+    _eq(throws(() => apiLogin('أ', 'secret', 'secret', cache)), 'auth', 'name of one letter refused');
+    _eq(throws(() => apiLogin('أحمد', 'wrong', 'secret', cache)), 'auth', 'wrong password refused');
+    const session = apiLogin(' أحمد  علي ', 'secret', 'secret', cache);
+    _eq(session.name, 'أحمد علي', 'login returns the cleaned name');
+    _ok(session.token.length >= 64, 'long random token');
+    _eq(apiSession(session.token, 'secret', cache), 'أحمد علي', 'session gives the name back');
+    _eq(throws(() => apiSession(session.token, 'changed', cache)), 'auth', 'a new password ends old sessions');
+    _eq(throws(() => apiSession('', 'secret', cache)), 'auth', 'no token refused');
+    _eq(throws(() => handleApiRequest({ action: 'data', token: 'nope', year: '2026', args: {} },
+      { password: 'secret', cache })), 'auth', 'data needs a session');
+
+    _section('منع التخمين');
+    const guarded = _memoryCache();
+    for (let i = 0; i < API.MAX_FAILS; i++) throws(() => apiLogin('أحمد', 'wrong', 'secret', guarded));
+    _eq(throws(() => apiLogin('أحمد', 'secret', 'secret', guarded)), 'auth', 'locked after ten wrong tries, even with the right one');
+    const nine = _memoryCache();
+    for (let i = 0; i < API.MAX_FAILS - 1; i++) throws(() => apiLogin('أحمد', 'wrong', 'secret', nine));
+    _eq(throws(() => apiLogin('أحمد', 'secret', 'secret', nine)), '', 'nine wrong tries do not lock');
+
+    _section('سجل التعديلات');
+    _eq(rowsToEditLog([[new Date(2026, 9, 24, 9, 5), 'أحمد', 'مصروف', '2026-10: 500'], ['', '', '', ''],
+      [new Date(2026, 9, 25, 14, 30), 'منى', 'سعر الساعة', 'سمية حمدي: 60']]),
+      [{ time: '2026-10-25 14:30', name: 'منى', action: 'سعر الساعة', details: 'سمية حمدي: 60' },
+        { time: '2026-10-24 09:05', name: 'أحمد', action: 'مصروف', details: '2026-10: 500' }], 'newest first, empty rows skipped');
+    _eq(API_WRITES.applyAlias.details({ teacher: 'سمية حمدي', from: 'ريما', to: 'ريم' }, { outcome: 'merged' }),
+      'ريما ← ريم عند سمية حمدي (دُمج)', 'alias log line');
+    _ok(Object.keys(API_WRITES).every(k => typeof API_WRITES[k].run === 'function'), 'every write has a handler');
+  });
+}
+
 function runAllUnitTests() {
   _T = { pass: 0, fail: 0, log: [] };
 
@@ -867,6 +921,7 @@ function runAllUnitTests() {
   _testRegistryRows();
   _testPublicStats();
   _testDashboard();
+  _testApi();
   _testStudentDetails();
 
   _report('UNIT TESTS');
@@ -1227,6 +1282,37 @@ function integrationTest_StudentDetails() {
  * يتطلب TEST_ROOT_FOLDER_ID؛ وإلا تفشل اختبارات التكامل برسالة واضحة.
  * الوقت المتوقع: 40–60 ثانية (حسب سرعة Drive/Sheets).
  */
+/**
+ * اختبار تكاملي — واجهة اللوحة كما تستدعيها الصفحة: الدخول، ثم البيانات، ثم
+ * كتابة تُسجَّل باسم من دخل، ثم doPost بطلب فاسد يُرجع JSON بخطأ.
+ */
+function integrationTest_Api() {
+  const tag = String(Date.now()).slice(-6);
+  const teacher = 'سمية حمدي';
+  _runIntegrationSubmission({
+    'اسم المعلم': teacher, 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '0',
+    'التقرير': _buildTestReport('06-09-2026', 'صباحية', 3, `${tag}6`, _sampleStudentText([{ name: `منير ${tag}` }])),
+    'ملاحظات خاصة للإدارة': '',
+  });
+  const deps = { password: `pass-${tag}`, cache: _memoryCache() };
+  const call = (action, args, token) => handleApiRequest(
+    { action, token: token || '', test: true, year: '2026', args: args || {} }, deps);
+
+  const login = call('login', { name: `مختبر ${tag}`, password: deps.password });
+  _ok(login.ok && login.token, 'login gives a token');
+  const data = call('data', {}, login.token);
+  _ok(data.ok && !_hasDate(data.data) && Array.isArray(data.data.log), 'data has the edit log and no Date');
+
+  const saved = call('saveRate', { teacher, rate: '65' }, login.token);
+  _eq(saved.data.teachers.find(t => t.name === teacher).rate, 65, 'rate saved through the API');
+  _eq(saved.data.log[0].name + '|' + saved.data.log[0].action + '|' + saved.data.log[0].details,
+    `مختبر ${tag}|سعر الساعة|${teacher}: 65`, 'write logged with the name typed at login');
+  _eq(call('data', {}, login.token).data.log[0].name, `مختبر ${tag}`, 'log row written to the registry');
+
+  const reply = JSON.parse(doPost({ postData: { contents: '{' } }).getContent());
+  _eq([reply.ok, reply.error], [false, 'طلب غير مفهوم.'], 'doPost answers a bad body with JSON');
+}
+
 function runAllTests() {
   runAllUnitTests();
   const unitPass = _T.pass;
@@ -1244,6 +1330,7 @@ function runAllTests() {
   _suite('Integration: PublicStats',                 integrationTest_PublicStats);
   _suite('Integration: Dashboard',                   integrationTest_Dashboard);
   _suite('Integration: StudentDetails',              integrationTest_StudentDetails);
+  _suite('Integration: Api',                         integrationTest_Api);
   _report('INTEGRATION TESTS');
 
   console.log(`\nSUMMARY — Unit: ${unitPass}P/${unitFail}F | Integration: ${_T.pass}P/${_T.fail}F`);
