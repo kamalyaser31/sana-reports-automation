@@ -12,6 +12,7 @@
 - **`Code.js`**: المحرك الرئيس لمعالجة نماذج Google Forms، وتوليد ملفات Markdown، وتحديث جداول Google Sheets، وإرسال تنبيهات Telegram والبريد، وتصدير ملفات PDF.
 - **`Config.local.js`**: ملف الأسرار والمفاتيح الحساسة المحلي (مُتجاهَل في Git ويُرفع عبر `clasp`).
 - **`Config.local.example.js`**: نموذج إرشادي للمفاتيح الحساسة مُدرج في المستودع.
+- **`Students.js`** (M1، لا يستدعيه مسار التقرير بعد): دوال سجل الطلاب الصرفة: `parseStudentBlocks`، و`studentNameKey`، و`buildAliasMap`/`resolveStudentName`، و`buildReportContext`، و`applyReportToStudents` (العدّ بالحلقة)، و`applyAliasToStudents`/`mergeStudentRecords`، و`studentToRow`/`rowToStudent`. والعمود M يحفظ الحلقات بفئتها وإعاداتها ووسامها، ومنها تُشتق الأعمدة المعدودة.
 - **`Diagnostics.js`**: دوال التشخيص اليدوي وفحص الربط والصلاحيات (`authorizeAndTest` وغيرها).
 - **`Test.js`**: منظومة اختبارات متكاملة تشمل إطار عمل مصغّر، و12 جناح اختبار وحدة (111 فحصاً دقيقاً)، و5 اختبارات تكاملية شاملة.
 - **`appsscript.json`**: إعدادات بيئة V8 ونطاقات OAuth الصريحة.

@@ -444,6 +444,190 @@ function _testGenerateMarkdown() {
   });
 }
 
+// ─── سجل الطلاب (Students.js) ────────────────────────────────────────────────
+
+/** يبني نص تقرير بصيغة formatStudent في تطبيق التقارير. */
+function _sampleReport(blocks) {
+  const sep = '━━━━━━━━━━━━━━━';
+  const body = blocks.map(b => {
+    const lines = [`${b.female ? 'الطالبة' : 'الطالب'}: ${b.name}`, ''];
+    lines.push('التسميع:', 'سورة نوح 1-20', `التقييم: ${b.grade || 'ممتاز'}`, sep);
+    if (b.hifz) lines.push('الحفظ الجديد:', b.hifz, sep);
+    lines.push('الماضي المطلوب:', 'سورة الإنسان');
+    if (b.medal) lines.push(sep, 'الوسام:', b.medal);
+    return lines.join('\n') + `\n\n${sep}`;
+  });
+  return ['بسم الله الرحمن الرحيم', 'التاريخ: الجمعة، ٢٣ أكتوبر ٢٠٢٦', 'الفترة: صباحية',
+    'رقم الحلقة: 1', `عدد الطلاب: ${blocks.length}`, sep].concat(body)
+    .concat(['', '*نسأل الله لهم التوفيق والسداد.*']).join('\n');
+}
+
+/** سياق تقرير جاهز لـ applyReportToStudents. */
+function _sampleContext(day, blocks, extra) {
+  return Object.assign({
+    reportId: `r-${day}`, teacher: 'سمية حمدي', date: new Date(2026, 9, day),
+    slot: `2026-10-${String(day).padStart(2, '0')}|صباحية|1`, category: 'أطفال',
+    students: parseStudentBlocks(_sampleReport(blocks)),
+  }, extra || {});
+}
+
+function _testStudentKey() {
+  _suite('studentNameKey / resolveStudentName', () => {
+    _eq(studentNameKey('جودياحمد'), studentNameKey('جودي احمد'), 'spaces ignored');
+    _eq(studentNameKey('أسماء علي'), studentNameKey('اسماء علي'), 'hamza forms → ا');
+    _eq(studentNameKey('فاطمة محمد'), studentNameKey('فاطمه محمد'), 'ة = ه');
+    _eq(studentNameKey('مُنى سامي'), studentNameKey('منى سامى'), 'tashkeel and ى ignored');
+    _ok(studentNameKey('حمزة علي') !== studentNameKey('حمزة علاء'), 'different names stay different');
+    _eq(cleanStudentName('  هدى‏   مصطفى '), 'هدى مصطفى', 'display name trimmed and collapsed');
+
+    _section('الأسماء البديلة');
+    const map = buildAliasMap([
+      { teacher: 'سمية حمدي', from: 'حمزه عالء', to: 'حمزة علاء' },
+      { teacher: 'سمية حمدي', from: 'منى', to: 'منى' },
+    ]);
+    _eq(resolveStudentName('سمية حمدي', 'حمزه  عالء', map).display, 'حمزة علاء', 'alias applied');
+    _eq(resolveStudentName('محمد نبيل', 'حمزه عالء', map).display, 'حمزه عالء', 'alias is per teacher');
+    _eq(Object.keys(map).length, 1, 'alias to the same key ignored');
+    const chain = buildAliasMap([
+      { teacher: 'T', from: 'أ ب', to: 'ج د' }, { teacher: 'T', from: 'ج د', to: 'هـ و' },
+      { teacher: 'T', from: 'س ص', to: 'ع غ' }, { teacher: 'T', from: 'ع غ', to: 'س ص' },
+    ]);
+    _eq(resolveStudentName('T', 'أ ب', chain).display, 'هـ و', 'alias chain followed');
+    _ok(Boolean(resolveStudentName('T', 'س ص', chain).key), 'alias cycle does not hang');
+  });
+}
+
+function _testParseStudents() {
+  _suite('parseStudentBlocks', () => {
+    const blocks = parseStudentBlocks(_sampleReport([
+      { name: 'حمزة علاء', hifz: 'سورة نوح ٢١-٢٨', grade: 'إعادة' },
+      { name: 'هدى مصطفى', female: true, medal: 'أداء ممتاز ومتميز' },
+      { name: 'بدون اسم' },
+    ]));
+    _eq(blocks.length, 2, 'two students, «بدون اسم» skipped');
+    _eq(blocks[0].name, 'حمزة علاء', 'name');
+    _eq(blocks[0].gender, STUDENT_GENDER.MALE, 'الطالب → ذكر');
+    _eq(blocks[1].gender, STUDENT_GENDER.FEMALE, 'الطالبة → أنثى');
+    _eq(blocks[0].hifz, 'سورة نوح 21-28', 'new memorization, digits normalized');
+    _eq(blocks[1].hifz, '', 'empty memorization');
+    _ok(blocks[0].hifz.indexOf('الإنسان') === -1, '«الماضي المطلوب» not read as memorization');
+    _eq(blocks[0].repeats, 1, 'repeat counted');
+    _eq(blocks[1].repeats, 0, 'no repeat');
+    _ok(!blocks[0].medal && blocks[1].medal, 'medal detected');
+    _eq(parseStudentBlocks('').length, 0, 'empty text → no students');
+  });
+}
+
+function _testSlotRule() {
+  _suite('applyReportToStudents (قاعدة الحلقة)', () => {
+    const r1 = applyReportToStudents([], _sampleContext(1, [
+      { name: 'حمزة علاء', grade: 'إعادة', hifz: 'نوح 1-10' }, { name: 'هدى مصطفى', female: true, medal: 'وسام' },
+    ]), {});
+    _eq(r1.newStudents, ['حمزة علاء', 'هدى مصطفى'], 'new students listed');
+    _eq(r1.counted, 2, 'both counted');
+
+    _section('إعادة إرسال التقرير نفسه');
+    const again = applyReportToStudents(r1.students, _sampleContext(1, [
+      { name: 'حمزه علاء', grade: 'إعادة' }, { name: 'هدى مصطفى', female: true, medal: 'وسام' },
+    ]), {});
+    _eq(again.counted, 0, 'resubmission counts nobody');
+    _eq(again.newStudents.length, 0, 'ة/ه spelling is not a new student');
+    const h = again.students.find(s => s.name === 'حمزة علاء');
+    const st = deriveStudentStats(h.slots);
+    _eq([st.attendance, st.repeats], [1, 1], 'attendance and repeats unchanged');
+    _eq(deriveStudentStats(again.students.find(s => s.name === 'هدى مصطفى').slots).medals, 1, 'medal unchanged');
+    _eq(r1.students[0].name, again.students[0].name, 'input not mutated');
+    _eq(Object.keys(r1.students[0].slots).length, 1, 'input slots not mutated');
+
+    _section('حلقة ثانية في اليوم نفسه');
+    const second = applyReportToStudents(r1.students, _sampleContext(1, [{ name: 'سارة أحمد', female: true }],
+      { slot: '2026-10-01|صباحية|2' }), {});
+    _eq(second.counted, 1, 'second halaqa counted');
+
+    _section('حلقة لاحقة، ثم تقرير متأخر');
+    const later = applyReportToStudents(r1.students, _sampleContext(10, [{ name: 'حمزة علاء' }]), {});
+    const late = applyReportToStudents(later.students, _sampleContext(5, [{ name: 'حمزة علاء', hifz: 'نوح 11-20' }]), {});
+    const hz = late.students.find(s => s.name === 'حمزة علاء');
+    const hs = deriveStudentStats(hz.slots);
+    _eq(hs.attendance, 3, 'three halaqat');
+    _eq(_isoDay(hs.lastSeen), '2026-10-10', 'late report does not change last seen');
+    _eq(_isoDay(hs.firstSeen), '2026-10-01', 'first seen');
+    _eq(late.students[0].name, 'حمزة علاء', 'newest attendance sorted first');
+    _eq([hz.firstHifz, hz.lastHifz], ['نوح 1-10', 'نوح 11-20'], 'first and last memorization by date');
+    _eq(hz.gender, STUDENT_GENDER.MALE, 'gender kept');
+    const older = applyReportToStudents(late.students, _sampleContext(3, [{ name: 'حمزة علاء', hifz: 'نوح 5-6' }]), {});
+    const ho = older.students.find(s => s.name === 'حمزة علاء');
+    _eq([ho.firstHifz, ho.lastHifz], ['نوح 1-10', 'نوح 11-20'], 'older late memorization changes neither first nor last');
+
+    _section('حلقة بلا حفظ لا تمحو آخر حفظ');
+    const noHifz = applyReportToStudents(late.students, _sampleContext(12, [{ name: 'حمزة علاء' }]), {});
+    _eq(noHifz.students.find(s => s.name === 'حمزة علاء').lastHifz, 'نوح 11-20', 'last memorization kept');
+
+    _section('الجنس يُكتب عند الإنشاء وحده');
+    const wrongPrefix = applyReportToStudents(r1.students, _sampleContext(3, [{ name: 'هدى مصطفى' }]), {});
+    _eq(wrongPrefix.students.find(s => s.name === 'هدى مصطفى').gender, STUDENT_GENDER.FEMALE, 'existing gender not overwritten');
+
+    _section('الاسم المكرر في تقرير واحد');
+    const dup = applyReportToStudents([], _sampleContext(2, [
+      { name: 'منى سامي', female: true, grade: 'إعادة' }, { name: 'منى سامى', female: true, grade: 'إعادة' },
+    ]), {});
+    _eq(dup.students.length, 1, 'same key folded into one row');
+    _eq(dup.counted, 1, 'counted once');
+    _eq(deriveStudentStats(dup.students[0].slots).repeats, 2, 'repeats of both blocks kept');
+
+    _section('البديل يُطبَّق على تقرير جديد');
+    const map = buildAliasMap([{ teacher: 'سمية حمدي', from: 'حمزه عالء', to: 'حمزة علاء' }]);
+    const aliased = applyReportToStudents(r1.students, _sampleContext(4, [{ name: 'حمزه عالء' }]), map);
+    _eq(aliased.newStudents.length, 0, 'aliased name is not new');
+    _eq(deriveStudentStats(aliased.students.find(s => s.name === 'حمزة علاء').slots).attendance, 2, 'counted on the right row');
+
+    _section('الفئة بالأغلب، والتعادل لأحدث حلقة');
+    _eq(deriveStudentStats({ '2026-10-01|a|1': ['كبار', 0, 0], '2026-10-02|a|1': ['أطفال', 0, 0],
+      '2026-10-03|a|1': ['كبار', 0, 0] }).category, 'كبار', 'majority category');
+    _eq(deriveStudentStats({ '2026-10-01|a|1': ['كبار', 0, 0], '2026-10-02|a|1': ['أطفال', 0, 0] }).category,
+      'أطفال', 'tie → latest halaqa');
+  });
+}
+
+function _testMergeStudents() {
+  _suite('applyAliasToStudents (الدمج)', () => {
+    const base = applyReportToStudents([], _sampleContext(1, [
+      { name: 'حمزة علاء', hifz: 'نوح 1-10' }, { name: 'حمزه عالء', grade: 'إعادة' },
+    ]), {}).students;
+    const withSecond = applyReportToStudents(base, _sampleContext(8, [{ name: 'حمزه عالء', hifz: 'نوح 11-20' }]), {}).students;
+    const right = withSecond.find(s => s.name === 'حمزة علاء');
+    right.gender = STUDENT_GENDER.FEMALE;
+    right.extra = ['ملاحظة الإدارة'];
+
+    const r = applyAliasToStudents(withSecond, { from: 'حمزه عالء', to: 'حمزة علاء' });
+    _ok(r.changed, 'merged');
+    _eq(r.students.length, 1, 'wrong row removed');
+    const m = r.students[0];
+    const st = deriveStudentStats(m.slots);
+    _eq(st.attendance, 2, 'shared halaqa counted once');
+    _eq(st.repeats, 0, 'shared slot keeps the correct row values');
+    _eq(m.gender, STUDENT_GENDER.FEMALE, 'gender from the correct row');
+    _eq(m.extra, ['ملاحظة الإدارة'], 'admin cells from the correct row');
+    _eq([m.firstHifz, m.lastHifz], ['نوح 1-10', 'نوح 11-20'], 'memorization from both rows by date');
+
+    _ok(!applyAliasToStudents(r.students, { from: 'حمزه عالء', to: 'حمزة علاء' }).changed, 'alias not applied twice');
+
+    _section('بلا صف صحيح: إعادة تسمية');
+    const renamed = applyAliasToStudents(base.filter(s => s.name === 'حمزه عالء'), { from: 'حمزه عالء', to: 'حمزة علي' });
+    _eq([renamed.students[0].name, renamed.students[0].key], ['حمزة علي', studentNameKey('حمزة علي')], 'row and key renamed');
+
+    _section('الصف والعمود M');
+    const row = studentToRow(m);
+    _eq(row.length, STUDENT_SYSTEM_COLUMNS + 1, 'A–M then admin cells');
+    _eq(row[5], 2, 'F = attendance');
+    const back = rowToStudent(row.slice(0, 1).concat(['أنثى']).concat(row.slice(2)));
+    _eq([back.key, back.extra], [m.key, ['ملاحظة الإدارة']], 'row read back by key, admin cells kept');
+    const respelled = rowToStudent(['حمزة علاءالدين'].concat(row.slice(1)));
+    _eq(respelled.key, m.key, 'admin spelling fix in A keeps the key');
+    _isNull(rowToStudent(['x', '', '', '', '', '', '', '', '', '', '', '', 'not json']), 'bad column M → null');
+  });
+}
+
 // ============================================================================
 // ③ تشغيل جميع اختبارات الوحدة
 // ============================================================================
@@ -468,6 +652,10 @@ function runAllUnitTests() {
   _testResolveSession();
   _testValidate();
   _testGenerateMarkdown();
+  _testStudentKey();
+  _testParseStudents();
+  _testSlotRule();
+  _testMergeStudents();
 
   _report('UNIT TESTS');
 }
