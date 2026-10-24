@@ -72,7 +72,8 @@ function doPost(e) {
   try {
     const request = parseApiRequest(e && e.postData ? e.postData.contents : '');
     reply = handleApiRequest(request, {
-      password: PropertiesService.getScriptProperties().getProperty(API.PASSWORD_KEY) || '',
+      // Config.local.js first, then Script Properties (_getSecret).
+      password: _getSecret(API.PASSWORD_KEY),
       cache: CacheService.getScriptCache(),
       // The form's document lock: shared by every anonymous call, and not the
       // script lock the report pipeline waits on for minutes.

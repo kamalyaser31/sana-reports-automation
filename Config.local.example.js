@@ -15,6 +15,9 @@ const LOCAL_SECRETS = {
   // بوت تيليجرام — رمز البوت من @BotFather
   TELEGRAM_BOT_TOKEN: '',
 
+  // كلمة مرور لوحة الإدارة؛ تغييرها ثم clasp push يُخرج كل من دخل
+  DASHBOARD_PASSWORD: '',
+
   // معرّف المجموعة / القناة في تيليجرام
   TELEGRAM_CHAT_ID:   '',
 
