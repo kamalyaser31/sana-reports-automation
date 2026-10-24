@@ -387,7 +387,8 @@ function _parseReportDate(dateText) {
 
   let day, monthIndex, year;
   const numeric = text.match(/(\d{1,2})\s*[-\/.]\s*(\d{1,2})\s*[-\/.]\s*(\d{4})/);
-  const named   = text.match(/(\d{1,2})\s+([^\s\d،,]+)\s+(\d{4})/);
+  // \s* before the month: teachers sometimes type "7أكتوبر" with no space.
+  const named   = text.match(/(\d{1,2})\s*([^\s\d،,]+)\s+(\d{4})/);
 
   if (numeric) {
     day = parseInt(numeric[1], 10); monthIndex = parseInt(numeric[2], 10) - 1; year = parseInt(numeric[3], 10);
@@ -452,13 +453,22 @@ function _resolveTeacher(raw, missingFields) {
     if (CONFIG.TEACHERS[trimmed]) {
       return { teacherName: CONFIG.TEACHERS[trimmed].name, teacherId: CONFIG.TEACHERS[trimmed].id };
     }
-    return {
-      teacherName: trimmed,
-      teacherId:   'T_' + Utilities.base64EncodeWebSafe(trimmed).substring(0, 6),
-    };
+    // A hash of the whole name: a base64 prefix covered only the first two letters,
+    // so two new teachers named "فاطمة …" shared one ID, and it was readable as a name.
+    return { teacherName: trimmed, teacherId: 'T_' + _shortHash(trimmed) };
   }
   missingFields.push(CONFIG.FIELDS.TEACHER);
   return { teacherName: CONFIG.FALLBACKS.TEACHER_NAME, teacherId: CONFIG.FALLBACKS.TEACHER_ID };
+}
+
+/**
+ * First 8 hex characters of the SHA-256 of a string: stable, and reveals nothing of it.
+ * @param {string} text
+ * @returns {string}
+ */
+function _shortHash(text) {
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8);
+  return bytes.slice(0, 4).map(b => ((b + 256) % 256).toString(16).padStart(2, '0')).join('');
 }
 
 /**
@@ -1119,7 +1129,7 @@ function sendTelegramNotification(data) {
     '📖 <b>تقرير حلقة جديد — أكاديمية سنا</b>',
     '',
     `• <b>المعلم:</b> ${escapeHtml(data.teacherName || 'غير محدد')}`,
-    `• <b>الفترة / النوع:</b> ${escapeHtml(data.sessionTypeName || data.sessionType || 'غير محدد')}`,
+    `• <b>الفترة / النوع:</b> ${escapeHtml(_sessionLabel(data) || 'غير محدد')}`,
     `• <b>تاريخ التقرير:</b> ${escapeHtml(data.reportDateText || data.submissionDateFormatted || 'غير محدد')}`,
     `• <b>مدة الحصة:</b> ${escapeHtml(data.durationFormatted || 'غير محدد')} (<code>${escapeHtml(data.durationTime || '00:00')}</code>)`,
     `• <b>عدد الطلاب:</b> ${escapeHtml(data.studentCount !== null && data.studentCount !== undefined ? String(data.studentCount) : 'غير محدد')}`,

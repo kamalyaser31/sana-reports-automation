@@ -140,6 +140,7 @@ function _testParseReportDate() {
     _ok(same(_parseReportDate('٢٩-٠٨-٢٠٢٦'), 2026, 7, 29),  'eastern digits DD-MM-YYYY');
     _ok(same(_parseReportDate('الأربعاء، ٣٠ سبتمبر ٢٠٢٦'), 2026, 8, 30), 'report app long Arabic form');
     _ok(same(_parseReportDate('‏الخميس، ١ أكتوبر ٢٠٢٦'), 2026, 9, 1), 'RLM mark ignored');
+    _ok(same(_parseReportDate('الأربعاء، 7أكتوبر ٢٠٢٦'), 2026, 9, 7), 'no space before month');
     _isNull(_parseReportDate(''),                'empty → null');
     _isNull(_parseReportDate('تاريخ غير محدد'),  'free text → null');
     _isNull(_parseReportDate('31-02-2026'),      'impossible date → null');
@@ -235,6 +236,11 @@ function _testResolveTeacher() {
     _eq(r2.teacherName,             'معلم جديد', 'unknown teacher name kept');
     _ok(r2.teacherId.startsWith('T_'), 'unknown teacher gets T_ prefix');
     _eq(mf2.length, 0,                 'not missing — just unknown');
+    _ok(/^T_[0-9a-f]{8}$/.test(r2.teacherId), 'unknown teacher ID is T_ + 8 hex chars');
+    _eq(_resolveTeacher({ rawTeacherName: 'معلم جديد' }, []).teacherId, r2.teacherId, 'same name → same ID');
+    const fa = _resolveTeacher({ rawTeacherName: 'فاطمة سالم' }, []).teacherId;
+    const fb = _resolveTeacher({ rawTeacherName: 'فاطمة حسن' }, []).teacherId;
+    _ok(fa !== fb, 'two new teachers sharing a first name get different IDs');
 
     _section('اسم فارغ');
     const mf3 = [];
