@@ -3,5 +3,6 @@
 !Config.local.js
 !Diagnostics.js
 !Students.js
+!PublicStats.js
 !Test.js
 !appsscript.json

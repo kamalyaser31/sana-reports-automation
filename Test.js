@@ -651,6 +651,91 @@ function _testRegistryRows() {
   });
 }
 
+// ─── الملف العام (PublicStats.js) ────────────────────────────────────────────
+
+/** معلمان وحلقات في سبتمبر وأكتوبر، والاسم المفرد «محمد» عند كليهما. */
+function _sampleStatsInput(today, extra) {
+  const rec = (name, slots) => ({ key: studentNameKey(name), name, gender: STUDENT_GENDER.MALE, slots });
+  const slot = (day, s, cat) => ({ [`${day}|${s}|1`]: [cat, 0, 0] });
+  const row = (id, y, m, d, t, s, cat, min, n) => [id, new Date(y, m, d), t, s, '1', cat, min, n];
+  return Object.assign({
+    teachers: [
+      { name: 'أسماء علي', code: 'T002', students: [
+        rec('حمزة علاء', slot('2026-10-05', 'مسائية', 'كبار')),
+        rec('محمد', slot('2026-10-05', 'مسائية', 'كبار')),
+      ] },
+      { name: 'محمد نبيل', code: 'T001', students: [
+        rec('حمزة علاء', Object.assign(slot('2026-09-28', 'صباحية', 'أطفال'), slot('2026-10-03', 'صباحية', 'أطفال'))),
+        rec('محمد', slot('2026-10-03', 'صباحية', 'أطفال')),
+      ] },
+    ],
+    halaqat: [
+      row('r1', 2026, 8, 28, 'محمد نبيل', 'صباحية', 'أطفال', 60, 1),
+      row('r2', 2026, 9, 3, 'محمد نبيل', 'صباحية', 'أطفال', 60, 2),
+      row('r2b', 2026, 9, 3, 'محمد نبيل', 'صباحية', 'أطفال', 60, 0),
+      row('r3', 2026, 9, 5, 'أسماء علي', 'مسائية', 'كبار', 90, 2),
+    ],
+    expenses: [['2026-10', 500, 'EUR'], ['2026-08', '', 'EUR']],
+    legacy: [
+      ['2026-09', 'الأكاديمية', 10, 12, 40, 4, 6, 7, 4, 5, 2],
+      ['2026-09', 'T001', 6, 7, 20, 3.3, 6, 7, 0, 0, ''],
+    ],
+    today,
+  }, extra || {});
+}
+
+function _testPublicStats() {
+  _suite('computePublicStats', () => {
+    const out = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20)));
+    const byCode = code => out.totals.find(r => r[0] === code);
+
+    _section('الإجمالي');
+    _eq(out.totals.map(r => r[0]), ['T001', 'T002', 'الأكاديمية', 'منذ التأسيس'], 'rows ordered by code, then academy and since start');
+    _eq(byCode('T001').slice(1), [2, 2, 2, 0, 2, 2, 3, 1.5, 2, 2, 0, 0, ''], 'teacher totals (resubmission row skipped)');
+    _eq(byCode('T002').slice(5, 9), [1, 1.5, 2, 2], 'second teacher halaqat, hours, attendance, average');
+    _eq(byCode('الأكاديمية')[1], 3, 'two-word name once across teachers, single name per teacher');
+    _eq(byCode('الأكاديمية').slice(5, 9), [3, 3.5, 5, 1.7], 'academy halaqat');
+    _eq(byCode('الأكاديمية')[13], 2, 'active teachers in the last 30 days');
+    _eq(byCode('منذ التأسيس').slice(1, 13), ['', '', '', '', 13, 15.5, 45, 3.5, 8, 9, 5, 6.5],
+      'since start = legacy academy rows + registry, no student count');
+    const later = computePublicStats(_sampleStatsInput(new Date(2026, 11, 1)));
+    _eq(later.totals.find(r => r[0] === 'الأكاديمية')[2], 0, 'nobody active after 30 days');
+
+    _section('شهرياً');
+    const month = (m, code) => out.monthly.find(r => r[0] === m && r[2] === code);
+    _ok(month('2026-09', 'T001')[1] instanceof Date, 'first month shows its start date');
+    _eq(month('2026-10', 'T001')[1], '', 'later months have no start date');
+    _eq(month('2026-09', 'T001').slice(3, 7), [1, 1, '', ''], 'first month: no continuity yet');
+    _eq(month('2026-10', 'T001').slice(3, 7), [1, 2, 1, 1], 'new, attended, continuing, ratio');
+    const ac = month('2026-10', 'الأكاديمية');
+    _eq(ac.slice(3, 14), [2, 3, 1, 1, 2, 2.5, 4, 2, 1, 1, 2], 'academy month');
+    _eq(ac.slice(14), [500, 'EUR', 200, 166.67], 'expense, cost per teaching hour, monthly sponsorship');
+    _eq(month('2026-09', 'الأكاديمية').slice(14), ['', '', '', ''], 'empty expense leaves the columns blank');
+
+    _section('اللقطة الثابتة');
+    _ok(!isMonthFrozen('2026-09', new Date(2026, 9, 5)), 'not frozen on the 5th');
+    _ok(isMonthFrozen('2026-09', new Date(2026, 9, 6)), 'frozen from the 6th');
+    const marker = ['2026-09', '', 'T001', 99];
+    const frozen = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { frozenMonthly: { '2026-09': [marker] } }));
+    _eq(frozen.monthly.filter(r => r[0] === '2026-09'), [marker], 'frozen month keeps its written rows');
+    const open = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { frozenMonthly: { '2026-10': [marker] } }));
+    _ok(open.monthly.filter(r => r[0] === '2026-10').length === 3, 'open month is recomputed');
+
+    _section('بلا أسماء');
+    const names = new Set(['حمزة علاء', 'محمد', 'محمد نبيل', 'أسماء علي']);
+    let error = '';
+    try { assertNoNames(out.totals.concat(out.monthly), names); } catch (e) { error = e.message; }
+    _eq(error, '', 'computed rows hold no student or teacher name');
+    try { assertNoNames([['T001', 'محمد']], names); } catch (e) { error = e.message; }
+    _ok(error !== '', 'a name in a row is refused');
+
+    _section('المصروفات');
+    _eq(readExpenses([['2026-10', 500, 'EUR'], [new Date(2026, 10, 1), 300, 'USD'], ['x', 1, 'EUR']]),
+      { '2026-10': { amount: 500, currency: 'EUR' }, '2026-11': { amount: 300, currency: 'USD' } },
+      'expense months read, a date cell becomes yyyy-mm');
+  });
+}
+
 // ============================================================================
 // ③ تشغيل جميع اختبارات الوحدة
 // ============================================================================
@@ -680,6 +765,7 @@ function runAllUnitTests() {
   _testSlotRule();
   _testMergeStudents();
   _testRegistryRows();
+  _testPublicStats();
 
   _report('UNIT TESTS');
 }
@@ -879,6 +965,50 @@ function integrationTest_StudentsRegistry() {
   _eq(third.newStudents.length, 0, 'alias applies to the next report');
 }
 
+/**
+ * اختبار تكاملي — الملف العام: يُبنى من السجل، ولا اسم فيه، ولا يمسّ «قبل النظام»،
+ * ويُكتب المصروف ثم يظهر في «شهرياً».
+ */
+function integrationTest_PublicStats() {
+  const tag = String(Date.now()).slice(-6);
+  const student = `سامي ${tag}`;
+  _runIntegrationSubmission({
+    'اسم المعلم': 'سمية حمدي', 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '30',
+    'التقرير': _buildTestReport('10-09-2026', 'مسائية', 1, `${tag}9`, _sampleStudentText([{ name: student }])),
+    'ملاحظات خاصة للإدارة': '',
+  });
+
+  _TEST_MODE = true;
+  try {
+    saveExpense('2026-09', '٤٠٠', 'eur');
+    saveExpense('2026-09', 450, 'EUR');
+    let refused = '';
+    try { saveExpense('2026-9', 10, 'EUR'); } catch (e) { refused = e.message; }
+    _ok(refused !== '', 'malformed month refused');
+
+    _ok(refreshPublicStats('2026'), 'public file refreshed');
+    const ss = SpreadsheetApp.openById(_firstNotTrashed(
+      getRootFolder().getFoldersByName('2026').next().getFilesByName(`${PUBLIC_STATS.FILE_PREFIX} 2026`)).getId());
+    const legacy = ss.getSheetByName(PUBLIC_STATS.LEGACY_TAB);
+    if (legacy.getLastRow() < 2) legacy.appendRow(['2026-08', PUBLIC_STATS.ACADEMY, 1, 1, 1, 1, 0, 0, 1, 1, 1]);
+    const legacyBefore = JSON.stringify(_readBody(legacy));
+    refreshPublicStats('2026');
+    _eq(JSON.stringify(_readBody(legacy)), legacyBefore, '«قبل النظام» unchanged by the refresh');
+
+    const cells = _readBody(ss.getSheetByName(PUBLIC_STATS.TOTALS_TAB))
+      .concat(_readBody(ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB)));
+    _ok(!cells.some(r => r.some(v => String(v).indexOf(tag) !== -1)), 'no student name in the public file');
+    _ok(!cells.some(r => r.some(v => v === 'سمية حمدي')), 'no teacher name in the public file');
+    const sept = _readBody(ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB))
+      .find(r => String(r[0]) === '2026-09' && r[2] === PUBLIC_STATS.ACADEMY);
+    _eq([sept[14], sept[15]], [450, 'EUR'], 'expense updated in place and shown');
+    const expenses = readExpenseMonths(_readBody(_findRegistry('2026').getSheetByName(REGISTRY.EXPENSES_TAB)));
+    _eq(expenses.filter(m => m === '2026-09').length, 1, 'one expense row per month');
+  } finally {
+    _TEST_MODE = false;
+  }
+}
+
 // ============================================================================
 // ⑤ المُشغِّل الكامل
 // ============================================================================
@@ -902,6 +1032,7 @@ function runAllTests() {
   _suite('Integration: MissingFields',               integrationTest_MissingFields);
   _suite('Integration: UnknownTeacher',              integrationTest_UnknownTeacher);
   _suite('Integration: StudentsRegistry',            integrationTest_StudentsRegistry);
+  _suite('Integration: PublicStats',                 integrationTest_PublicStats);
   _report('INTEGRATION TESTS');
 
   console.log(`\nSUMMARY — Unit: ${unitPass}P/${unitFail}F | Integration: ${_T.pass}P/${_T.fail}F`);
