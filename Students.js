@@ -551,10 +551,27 @@ function getOrCreateRegistry(yearFolder, year) {
  * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet|null}
  */
 function _findRegistry(year) {
-  const yearFolder = _firstNotTrashed(getRootFolder().getFoldersByName(sanitizeFilename(year)));
+  const root = _findRootFolder();
+  const yearFolder = root && _firstNotTrashed(root.getFoldersByName(sanitizeFilename(year)));
   if (!yearFolder) return null;
   const file = _firstNotTrashed(yearFolder.getFilesByName(`${REGISTRY.FILE_PREFIX} ${year}`));
   return file ? SpreadsheetApp.openById(file.getId()) : null;
+}
+
+/**
+ * The root folder without ever creating one. getRootFolder() creates a root
+ * when its name search finds none, which is right for the owner's pipeline but
+ * would plant an empty folder in a dashboard visitor's Drive.
+ * @returns {GoogleAppsScript.Drive.Folder|null}
+ */
+function _findRootFolder() {
+  if (_TEST_MODE) return getRootFolder();
+  const id = CONFIG.ROOT_FOLDER_ID;
+  if (id && id.trim()) {
+    try { return DriveApp.getFolderById(id.trim()); }
+    catch (e) { console.warn(`[DRIVE WARNING] Root folder "${id}" not accessible; searching by name.`); }
+  }
+  return _firstNotTrashed(DriveApp.getFoldersByName(CONFIG.ROOT_FOLDER_NAME));
 }
 
 /**
@@ -695,6 +712,25 @@ function applyAlias(alias, year) {
     const outcome = _applyAliasToTab(sheet, { from, to });
     aliasTab.getRange(aliasRow, 4).setValue(new Date()).setNumberFormat(REGISTRY.DATE_FORMAT);
     return { outcome };
+  });
+}
+
+/**
+ * Deletes an alias, so later reports keep the name as written. Rows already
+ * merged stay merged (section 12 of the plan).
+ * @param {string} teacher
+ * @param {string} from
+ * @param {string} [year]
+ * @returns {boolean} false when no such alias exists.
+ */
+function deleteAlias(teacher, from, year) {
+  return _withScriptLock(() => {
+    const aliasTab = _registryOrThrow(year).getSheetByName(REGISTRY.ALIASES_TAB);
+    const match = rowsToAliases(_readBody(aliasTab))
+      .filter(a => a.teacher === teacher && studentNameKey(a.from) === studentNameKey(from));
+    // Bottom-up, so deleting a row does not shift the next one to delete.
+    match.reverse().forEach(a => aliasTab.deleteRow(a.row));
+    return match.length > 0;
   });
 }
 

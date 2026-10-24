@@ -314,7 +314,7 @@ function refreshPublicStats(year, today) {
   const registry = _findRegistry(y);
   if (!registry) return false;
 
-  const yearFolder = _firstNotTrashed(getRootFolder().getFoldersByName(sanitizeFilename(y)));
+  const yearFolder = _firstNotTrashed(_findRootFolder().getFoldersByName(sanitizeFilename(y)));
   const ss = _getOrCreatePublicFile(yearFolder, y);
   const reserved = [REGISTRY.ALIASES_TAB, REGISTRY.EXPENSES_TAB, REGISTRY.HALAQAT_TAB];
   const teachers = registry.getSheets()

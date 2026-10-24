@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <title>لوحة إدارة أكاديمية سنا</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    :focus-visible { outline: 3px solid #1d4ed8; outline-offset: 2px; }
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid #9ca3af; padding: .35rem .5rem; text-align: start; }
+    caption { text-align: start; font-weight: 700; padding: .25rem 0; }
+  </style>
+</head>
+<body class="bg-white text-gray-900 text-base leading-relaxed">
+<div x-data="dashboard()" class="max-w-6xl mx-auto p-4">
+
+  <a href="#main" class="sr-only focus:not-sr-only underline">تخطَّ إلى المحتوى</a>
+
+  <header class="mb-4">
+    <h1 class="text-2xl font-bold">لوحة إدارة أكاديمية سنا</h1>
+    <p x-show="test" x-cloak class="font-bold border-2 border-gray-900 p-2">وضع الاختبار: هذه بيانات مجلد الاختبار، لا بيانات الأكاديمية.</p>
+    <p x-show="data" x-cloak>سنة <span x-text="data && data.year"></span>، وتاريخ اليوم <span x-text="data && data.today"></span>.</p>
+  </header>
+
+  <nav aria-label="أقسام اللوحة" class="mb-4">
+    <ul class="flex flex-wrap gap-4 underline">
+      <li><a href="#numbers">الأرقام</a></li>
+      <li><a href="#students">الطلاب</a></li>
+      <li><a href="#fix-name">تصحيح اسم</a></li>
+      <li><a href="#expenses">المصروفات</a></li>
+    </ul>
+  </nav>
+
+  <p id="status" role="status" aria-live="polite" class="mb-2 font-bold" x-text="status"></p>
+  <!-- Always in the DOM (empty when there is no error), so focus can move to it at once. -->
+  <p id="error" role="alert" tabindex="-1" class="mb-2 font-bold text-red-800"
+     :class="error ? 'border-2 border-red-800 p-2' : ''" x-text="error ? 'خطأ: ' + error : ''"></p>
+
+  <main id="main" tabindex="-1">
+  <template x-if="data"><div>
+
+    <!-- 1. Numbers -->
+    <section id="numbers" aria-labelledby="numbers-h" class="mb-8">
+      <h2 id="numbers-h" class="text-xl font-bold mb-2">الأرقام</h2>
+      <div class="overflow-x-auto">
+        <table class="mb-4 text-sm">
+          <caption>الإجمالي منذ بداية السجل</caption>
+          <thead><tr><template x-for="h in data.totalsHeaders" :key="h"><th scope="col" x-text="h"></th></template></tr></thead>
+          <tbody>
+            <template x-for="(row, i) in data.totals" :key="i">
+              <tr><template x-for="(cell, j) in row" :key="j">
+                <th x-show="j === 0" scope="row" x-text="cell"></th>
+                <td x-show="j > 0" x-text="cell"></td>
+              </template></tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <label for="month-select" class="font-bold">الشهر:</label>
+      <select id="month-select" x-model="month" class="border border-gray-700 p-1 mb-2">
+        <template x-for="m in months()" :key="m"><option :value="m" :selected="m === month" x-text="m"></option></template>
+      </select>
+      <div class="overflow-x-auto">
+        <table class="text-sm">
+          <caption x-text="'أرقام شهر ' + month"></caption>
+          <thead><tr><template x-for="h in data.monthlyHeaders.slice(2)" :key="h"><th scope="col" x-text="h"></th></template></tr></thead>
+          <tbody>
+            <template x-for="(row, i) in monthRows()" :key="i">
+              <tr><template x-for="(cell, j) in row.slice(2)" :key="j">
+                <th x-show="j === 0" scope="row" x-text="cell"></th>
+                <td x-show="j > 0" x-text="cell"></td>
+              </template></tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 2. Students -->
+    <section id="students" aria-labelledby="students-h" class="mb-8">
+      <h2 id="students-h" class="text-xl font-bold mb-2">الطلاب</h2>
+      <div class="flex flex-wrap gap-4 mb-2">
+        <div>
+          <label for="teacher-select" class="font-bold block">المعلم</label>
+          <select id="teacher-select" x-model="teacher" class="border border-gray-700 p-1">
+            <template x-for="t in data.teachers" :key="t.name"><option :value="t.name" :selected="t.name === teacher" x-text="t.name + ' (' + t.students.length + ')'"></option></template>
+          </select>
+        </div>
+        <div>
+          <label for="search" class="font-bold block">ابحث بالاسم</label>
+          <input id="search" type="search" x-model="search" class="border border-gray-700 p-1" aria-describedby="search-count">
+          <p id="search-count" x-text="filteredStudents().length + ' طالباً'"></p>
+        </div>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="text-sm">
+          <caption x-text="'طلاب ' + teacher + '، الأحدث حضوراً أولاً'"></caption>
+          <thead><tr>
+            <th scope="col">الاسم</th><th scope="col">الجنس</th><th scope="col">الفئة</th>
+            <th scope="col">أول ظهور</th><th scope="col">آخر ظهور</th><th scope="col">الحضور</th>
+            <th scope="col">آخر حفظ</th><th scope="col">الإعادة</th><th scope="col">الأوسمة</th>
+          </tr></thead>
+          <tbody>
+            <template x-for="s in filteredStudents()" :key="s.key">
+              <tr>
+                <th scope="row"><span x-text="s.name"></span><span x-show="s.isNew"> (جديد)</span></th>
+                <td>
+                  <label :for="'g-' + s.key" class="sr-only" x-text="'جنس ' + s.name"></label>
+                  <select :id="'g-' + s.key" x-model="genders[s.key]" class="border border-gray-700 p-1">
+                    <option value="ذكر">ذكر</option><option value="أنثى">أنثى</option>
+                  </select>
+                  <button type="button" class="border border-gray-900 px-2 ms-1 disabled:opacity-50"
+                          :disabled="busy || genders[s.key] === s.gender"
+                          :aria-label="'احفظ جنس ' + s.name"
+                          @click="saveGender(s)">احفظ</button>
+                </td>
+                <td x-text="s.category"></td><td x-text="s.firstSeen"></td><td x-text="s.lastSeen"></td>
+                <td x-text="s.attendance"></td><td x-text="s.lastHifz"></td>
+                <td x-text="s.repeats"></td><td x-text="s.medals"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 3. Fix a name -->
+    <section id="fix-name" aria-labelledby="fix-h" class="mb-8">
+      <h2 id="fix-h" class="text-xl font-bold mb-2">تصحيح اسم</h2>
+      <p class="mb-2">اختر المعلم المحدد في قسم الطلاب، ثم الاسم كما ورد خطأً، ثم الاسم الصحيح. يُدمج الصفان في الحال، ولا يُنقض الدمج.</p>
+      <form @submit.prevent="reviewAlias()" class="flex flex-col gap-3 max-w-xl">
+        <p>المعلم: <strong x-text="teacher"></strong></p>
+        <div>
+          <label for="alias-from" class="font-bold block">الاسم كما ورد (الخطأ)</label>
+          <select id="alias-from" x-model="aliasFrom" required class="border border-gray-700 p-1 w-full">
+            <option value="">-- اختر --</option>
+            <template x-for="s in currentStudents()" :key="s.key">
+              <option :value="s.name" x-text="s.name + (s.isNew ? ' (جديد)' : '') + '، حضر ' + s.attendance"></option>
+            </template>
+          </select>
+        </div>
+        <fieldset>
+          <legend class="font-bold">الاسم الصحيح</legend>
+          <label class="me-4"><input type="radio" value="list" x-model="aliasMode"> من طلاب المعلم</label>
+          <label><input type="radio" value="typed" x-model="aliasMode"> أكتبه</label>
+          <div x-show="aliasMode === 'list'" class="mt-2">
+            <label for="alias-to-list" class="sr-only">الاسم الصحيح من القائمة</label>
+            <select id="alias-to-list" x-model="aliasToList" class="border border-gray-700 p-1 w-full">
+              <option value="">-- اختر --</option>
+              <template x-for="s in currentStudents().filter(x => x.name !== aliasFrom)" :key="s.key">
+                <option :value="s.name" x-text="s.name + '، حضر ' + s.attendance"></option>
+              </template>
+            </select>
+          </div>
+          <div x-show="aliasMode === 'typed'" class="mt-2">
+            <label for="alias-to-typed" class="sr-only">اكتب الاسم الصحيح</label>
+            <input id="alias-to-typed" type="text" x-model="aliasToTyped" class="border border-gray-700 p-1 w-full">
+          </div>
+        </fieldset>
+        <button type="submit" class="border-2 border-gray-900 px-3 py-1 font-bold self-start" :disabled="busy">راجع قبل الدمج</button>
+      </form>
+
+      <div x-show="review" x-cloak id="alias-review" tabindex="-1" class="border-2 border-gray-900 p-3 mt-3 max-w-xl"
+           role="group" aria-labelledby="review-h">
+        <h3 id="review-h" class="font-bold">راجع الدمج</h3>
+        <p x-text="review && reviewText()"></p>
+        <div class="flex gap-3 mt-2">
+          <button type="button" class="border-2 border-gray-900 px-3 py-1 font-bold" :disabled="busy" @click="confirmAlias()">ادمج الآن</button>
+          <button type="button" class="border border-gray-900 px-3 py-1" @click="review = null; focusEl('alias-from')">إلغاء</button>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto mt-4">
+        <table class="text-sm">
+          <caption>الأسماء البديلة المحفوظة</caption>
+          <thead><tr><th scope="col">المعلم</th><th scope="col">كما ورد</th><th scope="col">الصحيح</th><th scope="col">طُبّق</th><th scope="col">حذف</th></tr></thead>
+          <tbody>
+            <template x-for="(a, i) in data.aliases" :key="i">
+              <tr>
+                <td x-text="a.teacher"></td><th scope="row" x-text="a.from"></th><td x-text="a.to"></td>
+                <td x-text="a.applied ? 'نعم' : 'لم يُطبَّق بعد'"></td>
+                <td>
+                  <button type="button" class="border border-gray-900 px-2" x-show="pendingDelete !== i"
+                          :aria-label="'احذف البديل ' + a.from" @click="pendingDelete = i">احذف</button>
+                  <button type="button" class="border-2 border-red-800 px-2 font-bold" x-show="pendingDelete === i"
+                          :aria-label="'تأكيد حذف البديل ' + a.from + '؛ لا يفصل ما دُمج'" :disabled="busy"
+                          @click="deleteAlias(a)">تأكيد الحذف</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+        <p x-show="!data.aliases.length">لا بدائل بعد.</p>
+      </div>
+    </section>
+
+    <!-- 4. Expenses -->
+    <section id="expenses" aria-labelledby="exp-h" class="mb-8">
+      <h2 id="exp-h" class="text-xl font-bold mb-2">المصروفات</h2>
+      <form @submit.prevent="saveExpense()" class="flex flex-wrap gap-4 items-end">
+        <div>
+          <label for="exp-month" class="font-bold block">الشهر</label>
+          <input id="exp-month" type="month" x-model="expMonth" required class="border border-gray-700 p-1">
+        </div>
+        <div>
+          <label for="exp-amount" class="font-bold block">المبلغ</label>
+          <input id="exp-amount" type="text" inputmode="decimal" x-model="expAmount" required class="border border-gray-700 p-1">
+        </div>
+        <div>
+          <label for="exp-currency" class="font-bold block">العملة</label>
+          <select id="exp-currency" x-model="expCurrency" class="border border-gray-700 p-1">
+            <template x-for="c in data.currencies" :key="c"><option :value="c" :selected="c === expCurrency" x-text="c"></option></template>
+          </select>
+        </div>
+        <button type="submit" class="border-2 border-gray-900 px-3 py-1 font-bold" :disabled="busy">احفظ المصروف</button>
+      </form>
+      <p class="mt-1">إن كُتب الشهر من قبل عُدّل مصروفه ولم يتكرر.</p>
+      <div class="overflow-x-auto mt-3">
+        <table class="text-sm">
+          <caption>مصروفات السنة</caption>
+          <thead><tr><th scope="col">الشهر</th><th scope="col">المبلغ</th><th scope="col">العملة</th></tr></thead>
+          <tbody>
+            <template x-for="e in data.expenses" :key="e.month">
+              <tr><th scope="row" x-text="e.month"></th><td x-text="e.amount"></td><td x-text="e.currency"></td></tr>
+            </template>
+          </tbody>
+        </table>
+        <p x-show="!data.expenses.length">لا مصروفات بعد.</p>
+      </div>
+    </section>
+  </div></template>
+  </main>
+</div>
+
+<script>
+  function dashboard() {
+    return {
+      data: null, status: 'جارٍ تحميل البيانات…', error: '', busy: false, year: '', test: false,
+      month: '', teacher: '', search: '', genders: {},
+      aliasFrom: '', aliasMode: 'list', aliasToList: '', aliasToTyped: '', review: null, pendingDelete: -1,
+      expMonth: '', expAmount: '', expCurrency: 'EGP',
+
+      init() {
+        const start = (params) => {
+          this.year = (params && params.year) || String(new Date().getFullYear());
+          this.test = !!(params && params.test === '1');
+          this.call('getDashboardData', [this.year], 'حُمّلت البيانات.');
+        };
+        if (window.google && google.script && google.script.url) {
+          google.script.url.getLocation(loc => start(loc.parameter));
+        } else {
+          start(null);
+        }
+      },
+
+      call(fn, args, done) {
+        this.busy = true;
+        this.error = '';
+        google.script.run
+          .withSuccessHandler(result => {
+            this.busy = false;
+            const data = result && result.data ? result.data : result;
+            this.load(data);
+            this.status = typeof done === 'function' ? done(result) : done;
+          })
+          .withFailureHandler(err => {
+            this.busy = false;
+            this.status = '';
+            this.error = (err && err.message) || String(err);
+            this.$nextTick(() => this.focusEl('error'));
+          })[fn](...args, this.test);
+      },
+
+      load(data) {
+        this.data = data;
+        this.genders = {};
+        data.teachers.forEach(t => t.students.forEach(s => { this.genders[s.key] = s.gender; }));
+        if (!data.teachers.some(t => t.name === this.teacher)) this.teacher = data.teachers.length ? data.teachers[0].name : '';
+        const months = this.months();
+        if (months.indexOf(this.month) === -1) this.month = months.length ? months[months.length - 1] : '';
+        if (!this.expCurrency && data.currencies.length) this.expCurrency = data.currencies[0];
+        this.pendingDelete = -1;
+      },
+
+      months() {
+        return this.data ? Array.from(new Set(this.data.monthly.map(r => r[0]))).sort() : [];
+      },
+      monthRows() {
+        return this.data ? this.data.monthly.filter(r => r[0] === this.month) : [];
+      },
+      currentStudents() {
+        const t = this.data && this.data.teachers.find(x => x.name === this.teacher);
+        return t ? t.students : [];
+      },
+      filteredStudents() {
+        const q = this.search.trim();
+        return this.currentStudents().filter(s => !q || s.name.indexOf(q) !== -1);
+      },
+      focusEl(id) {
+        const el = document.getElementById(id);
+        if (el) el.focus();
+      },
+
+      saveGender(s) {
+        this.call('dashboardSetGender', [this.teacher, s.key, this.genders[s.key], this.year],
+          'حُفظ جنس ' + s.name + ': ' + this.genders[s.key] + '.');
+      },
+
+      aliasTo() {
+        return (this.aliasMode === 'list' ? this.aliasToList : this.aliasToTyped).trim();
+      },
+      reviewAlias() {
+        const to = this.aliasTo();
+        if (!this.aliasFrom || !to) {
+          this.error = 'اختر الاسم الخطأ والاسم الصحيح.';
+          this.$nextTick(() => this.focusEl('error'));
+          return;
+        }
+        const list = this.currentStudents();
+        this.review = {
+          from: list.find(s => s.name === this.aliasFrom),
+          to: list.find(s => s.name === to) || null,
+          toName: to,
+        };
+        this.$nextTick(() => this.focusEl('alias-review'));
+      },
+      reviewText() {
+        const r = this.review;
+        const row = s => 'حضر ' + s.attendance + ' مرة، من ' + s.firstSeen + ' إلى ' + s.lastSeen;
+        const from = '«' + r.from.name + '» (' + row(r.from) + ')';
+        return r.to
+          ? 'سيُدمج ' + from + ' في «' + r.to.name + '» (' + row(r.to) + ')، ويبقى جنس الصحيح وخاناته.'
+          : 'لا صف باسم «' + r.toName + '»، فيُعاد تسمية ' + from + ' إليه.';
+      },
+      confirmAlias() {
+        const alias = { teacher: this.teacher, from: this.review.from.name, to: this.review.toName };
+        this.review = null;
+        this.call('dashboardApplyAlias', [alias, this.year], result => {
+          this.aliasFrom = ''; this.aliasToList = ''; this.aliasToTyped = '';
+          const word = { merged: 'دُمج', renamed: 'أُعيدت تسمية', absent: 'لم يوجد' }[result.outcome] || result.outcome;
+          return word + ' «' + alias.from + '» ← «' + alias.to + '». ويُطبَّق البديل على التقارير الآتية.';
+        });
+      },
+      deleteAlias(a) {
+        this.call('dashboardDeleteAlias', [a.teacher, a.from, this.year], 'حُذف البديل «' + a.from + '».');
+      },
+
+      saveExpense() {
+        this.call('dashboardSaveExpense', [this.expMonth, this.expAmount, this.expCurrency, this.year],
+          'حُفظ مصروف ' + this.expMonth + '.');
+      },
+    };
+  }
+</script>
+</body>
+</html>

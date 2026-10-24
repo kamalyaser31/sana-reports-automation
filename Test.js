@@ -736,6 +736,41 @@ function _testPublicStats() {
   });
 }
 
+// ─── لوحة الإدارة (Dashboard.js) ─────────────────────────────────────────────
+
+/** يتحقق أن لا Date في الكائن، لأن google.script.run يرفضها. */
+function _hasDate(value) {
+  if (value instanceof Date) return true;
+  if (Array.isArray(value)) return value.some(_hasDate);
+  if (value && typeof value === 'object') return Object.keys(value).some(k => _hasDate(value[k]));
+  return false;
+}
+
+function _testDashboard() {
+  _suite('buildDashboardData', () => {
+    const input = _sampleStatsInput(new Date(2026, 9, 15));
+    const d = buildDashboardData(Object.assign({ year: '2026', aliases: [['محمد نبيل', 'حمزه عالء', 'حمزة علاء', '']] }, input));
+    _ok(!_hasDate(d), 'no Date object crosses google.script.run');
+    _eq(d.totals.map(r => r[0]).slice(0, 2), ['محمد نبيل', 'أسماء علي'], 'codes become teacher names');
+    _ok(d.monthly.some(r => r[2] === 'محمد نبيل'), 'monthly rows named too');
+    _eq(d.teachers.map(t => t.name), ['أسماء علي', 'محمد نبيل'], 'teachers by name');
+    const mn = d.teachers[1].students;
+    _eq(mn[0].name, 'حمزة علاء', 'students newest first');
+    _eq([mn[0].firstSeen, mn[0].lastSeen, mn[0].attendance], ['2026-09-28', '2026-10-03', 2], 'student dates as text');
+    _ok(mn[1].isNew && !mn[0].isNew, 'first seen in the last 14 days → new');
+    _eq(d.aliases, [{ teacher: 'محمد نبيل', from: 'حمزه عالء', to: 'حمزة علاء', applied: false }], 'aliases listed');
+    _eq(d.expenses.map(e => e.month), ['2026-10', '2026-08'], 'expense rows listed');
+    _ok(d.currencies.indexOf('EGP') !== -1, 'currency list sent');
+    _has(_friendlyError(new Error('Exception: You do not have permission to access the requested document.')).message,
+      'ليس لك حق التعديل', 'permission error explained in Arabic');
+    _eq(_friendlyError(new Error('اختر المعلم والاسمين.')).message, 'اختر المعلم والاسمين.', 'own messages kept');
+    _eq([_withMode(true, () => _TEST_MODE), _TEST_MODE], [true, false], '?test=1 uses the test folder, then restores');
+    _TEST_MODE = true;
+    try { _ok(_withMode(undefined, () => _TEST_MODE), 'a page call never switches test mode off'); }
+    finally { _TEST_MODE = false; }
+  });
+}
+
 // ============================================================================
 // ③ تشغيل جميع اختبارات الوحدة
 // ============================================================================
@@ -766,6 +801,7 @@ function runAllUnitTests() {
   _testMergeStudents();
   _testRegistryRows();
   _testPublicStats();
+  _testDashboard();
 
   _report('UNIT TESTS');
 }
@@ -1009,6 +1045,53 @@ function integrationTest_PublicStats() {
   }
 }
 
+/**
+ * اختبار تكاملي — دوال اللوحة كما تستدعيها الصفحة: القراءة، ثم بديل يُدمج،
+ * ثم حذفه، ثم مصروف، ثم جنس. وكل نتيجة بلا Date.
+ */
+function integrationTest_Dashboard() {
+  const tag = String(Date.now()).slice(-6);
+  const teacher = 'سمية حمدي';
+  const right = `ريم ${tag}`;
+  const typo = `ريما ${tag}`;
+  _runIntegrationSubmission({
+    'اسم المعلم': teacher, 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '0',
+    'التقرير': _buildTestReport('05-09-2026', 'صباحية', 2, `${tag}5`,
+      _sampleStudentText([{ name: right, female: true }, { name: typo, female: true }])),
+    'ملاحظات خاصة للإدارة': '',
+  });
+
+  _TEST_MODE = true;
+  try {
+    const data = getDashboardData('2026');
+    _ok(!_hasDate(data), 'dashboard data has no Date');
+    const students = () => getDashboardData('2026').teachers.find(t => t.name === teacher).students;
+    _ok(students().some(s => s.name === typo), 'misspelt student listed');
+
+    const merged = dashboardApplyAlias({ teacher, from: typo, to: right }, '2026');
+    _eq(merged.outcome, 'merged', 'alias merged from the dashboard');
+    _ok(!merged.data.teachers.find(t => t.name === teacher).students.some(s => s.name === typo), 'fresh data returned');
+    _ok(merged.data.aliases.some(a => a.from === typo && a.applied), 'alias listed as applied');
+
+    const afterDelete = dashboardDeleteAlias(teacher, typo, '2026');
+    _ok(!afterDelete.aliases.some(a => a.from === typo), 'alias deleted');
+    _ok(afterDelete.teachers.find(t => t.name === teacher).students.some(s => s.name === right), 'merged row stays merged');
+
+    const withExpense = dashboardSaveExpense('2026-08', '120', 'USD', '2026');
+    _ok(withExpense.expenses.some(e => e.month === '2026-08' && e.amount === 120), 'expense saved from the dashboard');
+
+    const key = studentNameKey(right);
+    const g = dashboardSetGender(teacher, key, STUDENT_GENDER.MALE, '2026');
+    _eq(g.teachers.find(t => t.name === teacher).students.find(s => s.key === key).gender, STUDENT_GENDER.MALE, 'gender saved from the dashboard');
+
+    let err = '';
+    try { dashboardSetGender(teacher, 'لا_يوجد', STUDENT_GENDER.MALE, '2026'); } catch (e) { err = e.message; }
+    _has(err, 'لم يوجد الطالب', 'unknown student explained');
+  } finally {
+    _TEST_MODE = false;
+  }
+}
+
 // ============================================================================
 // ⑤ المُشغِّل الكامل
 // ============================================================================
@@ -1033,6 +1116,7 @@ function runAllTests() {
   _suite('Integration: UnknownTeacher',              integrationTest_UnknownTeacher);
   _suite('Integration: StudentsRegistry',            integrationTest_StudentsRegistry);
   _suite('Integration: PublicStats',                 integrationTest_PublicStats);
+  _suite('Integration: Dashboard',                   integrationTest_Dashboard);
   _report('INTEGRATION TESTS');
 
   console.log(`\nSUMMARY — Unit: ${unitPass}P/${unitFail}F | Integration: ${_T.pass}P/${_T.fail}F`);
