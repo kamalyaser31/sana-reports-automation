@@ -108,9 +108,9 @@ const CONFIG = {
     'ملاحظات الإدارة',
   ],
 
-  // Off until install day (S-31 in PLAN_STUDENTS_SHEET.md); integration tests run it regardless.
+  // On since install day, 2026-10-25 (S-31 in PLAN_STUDENTS_SHEET.md); the registry starts that day.
   STUDENTS_REGISTRY: {
-    ENABLED: false,
+    ENABLED: true,
   },
 
   TELEGRAM: {
