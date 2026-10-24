@@ -459,6 +459,22 @@ function rowsToAliases(values) {
   })).filter(a => a.teacher && a.from && a.to);
 }
 
+/**
+ * Reads «أسعار الساعة» values into teacher tab name → rate (S-34); a blank or
+ * non-positive cell is no rate.
+ * @param {Array<Array>} values
+ * @returns {Object<string, number>}
+ */
+function readRates(values) {
+  const out = {};
+  (values || []).forEach(v => {
+    const teacher = String(v[0] || '').trim();
+    const rate = Number(v[1]);
+    if (teacher && rate > 0) out[_teacherTabName(teacher)] = rate;
+  });
+  return out;
+}
+
 // ============================================================================
 // 6. REGISTRY SPREADSHEET (M2)
 // ============================================================================
@@ -468,6 +484,7 @@ const REGISTRY = {
   ALIASES_TAB:  'الأسماء البديلة',
   EXPENSES_TAB: 'المصروفات',
   HALAQAT_TAB:  'الحلقات',
+  RATES_TAB:    'أسعار الساعة',
   DATE_FORMAT:  'dd-mm-yyyy',
   STUDENT_HEADERS: [
     'اسم الطالب', 'الجنس', 'فئة الطلاب', 'أول ظهور', 'آخر ظهور', 'عدد مرات الحضور',
@@ -476,6 +493,7 @@ const REGISTRY = {
   ],
   ALIAS_HEADERS:   ['المعلم', 'الاسم كما ورد', 'الاسم الصحيح', 'تاريخ التطبيق'],
   EXPENSE_HEADERS: ['الشهر', 'المبلغ', 'العملة'],
+  RATE_HEADERS:    ['المعلم', 'السعر'],
   HALAQA_HEADERS:  ['report_id', 'التاريخ', 'المعلم', 'الفترة', 'رقم الحلقة', 'الفئة',
     'المدة بالدقائق', 'الطلاب المحسوبون'],
 };
@@ -711,13 +729,40 @@ function getOrCreateRegistry(yearFolder, year) {
   const halaqat = ss.insertSheet(REGISTRY.HALAQAT_TAB);
   _styleHeader(halaqat, REGISTRY.HALAQA_HEADERS);
   halaqat.hideSheet();
+  const rates = _getOrCreateRatesTab(ss);
 
+  // Aliases and hourly rates carry into the new year (S-02, S-34).
   const previous = _findRegistry(String(Number(year) - 1));
   if (previous) {
     const carried = _readBody(previous.getSheetByName(REGISTRY.ALIASES_TAB));
     if (carried.length) first.getRange(2, 1, carried.length, REGISTRY.ALIAS_HEADERS.length).setValues(carried);
+    const lastRates = _readBody(previous.getSheetByName(REGISTRY.RATES_TAB));
+    if (lastRates.length) rates.getRange(2, 1, lastRates.length, REGISTRY.RATE_HEADERS.length).setValues(lastRates);
   }
   return ss;
+}
+
+/**
+ * «أسعار الساعة», added on first use to a registry made before S-34.
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} ss
+ * @returns {GoogleAppsScript.Spreadsheet.Sheet}
+ */
+function _getOrCreateRatesTab(ss) {
+  const existing = ss.getSheetByName(REGISTRY.RATES_TAB);
+  if (existing) return existing;
+  const sheet = ss.insertSheet(REGISTRY.RATES_TAB);
+  _styleHeader(sheet, REGISTRY.RATE_HEADERS);
+  return sheet;
+}
+
+/**
+ * The registry's teacher tabs: every tab but the reserved ones.
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} ss
+ * @returns {GoogleAppsScript.Spreadsheet.Sheet[]}
+ */
+function registryTeacherSheets(ss) {
+  const reserved = [REGISTRY.ALIASES_TAB, REGISTRY.EXPENSES_TAB, REGISTRY.HALAQAT_TAB, REGISTRY.RATES_TAB];
+  return ss.getSheets().filter(sh => reserved.indexOf(sh.getName()) === -1);
 }
 
 /**
@@ -957,6 +1002,26 @@ function setStudentGender(teacher, key, gender, year) {
     });
     if (index === -1) throw new Error('لم يوجد الطالب؛ لعل صفه دُمج. حدّث الصفحة.');
     sheet.getRange(index + 2, 2).setValue(gender);
+  });
+}
+
+/**
+ * Saves a teacher's hourly rate in pounds (S-34): updates the teacher's row if
+ * it exists, else appends one. The one rate prices every open month.
+ * @param {string} teacher - Teacher tab name.
+ * @param {number|string} rate
+ * @param {string} [year]
+ */
+function saveTeacherRate(teacher, rate, year) {
+  const value = Number(normalizeDigitsAndText(String(rate)).trim());
+  if (!(value > 0)) throw new Error('سعر الساعة رقم أكبر من صفر.');
+  _withScriptLock(() => {
+    const ss = _registryOrThrow(year);
+    if (!teacher || !ss.getSheetByName(_teacherTabName(teacher))) throw new Error(`لا تبويب للمعلم «${teacher}» في السجل.`);
+    const sheet = _getOrCreateRatesTab(ss);
+    const index = _readBody(sheet).findIndex(r => String(r[0]).trim() === teacher);
+    const row = index === -1 ? sheet.getLastRow() + 1 : index + 2;
+    sheet.getRange(row, 1, 1, 2).setValues([[teacher, Math.round(value * 100) / 100]]);
   });
 }
 

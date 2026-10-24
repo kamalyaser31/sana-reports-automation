@@ -6,6 +6,8 @@
  * only (S-18), and writes them to «إحصاءات أكاديمية سنا <year>». Teachers
  * appear by code (S-17). The «قبل النظام» tab is pasted once by hand and never
  * written here (S-28); it is read for the «منذ التأسيس» row (S-30).
+ * The month's expense is the teachers' pay (hours × «أسعار الساعة») plus the
+ * other expenses in «المصروفات», all in pounds (S-36, S-37).
  * The computation is a pure function, computePublicStats, covered by unit tests.
  * ============================================================================
  */
@@ -21,6 +23,7 @@ const PUBLIC_STATS = {
   FREEZE_DAY:   5,
   CHILDREN:     'أطفال',
   ADULTS:       'كبار',
+  CURRENCY:     'EGP',
   TOTALS_HEADERS: [
     'المعلم', 'عدد الطلاب الكلي', 'الطلاب النشطون', 'الذكور', 'الإناث', 'عدد الحلقات',
     'ساعات التدريس', 'الحضور الكلي', 'متوسط الطلاب في الحلقة', 'حلقات الأطفال',
@@ -146,21 +149,45 @@ function readExpenses(rows) {
 }
 
 /**
+ * Each teacher's pay per month (S-35): the month's registry hours times the
+ * current rate, rounded to the pound. rate and pay are '' without a rate.
+ * @param {Array<Object>} halaqat - From collectHalaqat.
+ * @param {Object<string, number>} rates - From readRates.
+ * @returns {Array<{month: string, teacher: string, hours: number, rate: number|string, pay: number|string}>}
+ */
+function computeTeacherPay(halaqat, rates) {
+  const byKey = {};
+  halaqat.forEach(h => {
+    const k = `${h.month}|${h.teacher}`;
+    (byKey[k] = byKey[k] || { month: h.month, teacher: h.teacher, minutes: 0 }).minutes += h.minutes;
+  });
+  return Object.keys(byKey).sort().map(k => {
+    const p = byKey[k];
+    const rate = rates[p.teacher] || '';
+    return { month: p.month, teacher: p.teacher, hours: _round(p.minutes / 60), rate,
+      pay: rate ? Math.round(p.minutes / 60 * rate) : '' };
+  });
+}
+
+/**
  * Computes both public tabs.
  * @param {Object} input
  * @param {Array<{name: string, code: string, students: Array<Object>}>} input.teachers
  * @param {Array<Array>} input.halaqat  - «الحلقات» values.
- * @param {Array<Array>} input.expenses - «المصروفات» values.
+ * @param {Array<Array>} input.expenses - «المصروفات» values (other expenses).
+ * @param {Array<Array>} [input.rates]  - «أسعار الساعة» values.
  * @param {Array<Array>} input.legacy   - «قبل النظام» values.
  * @param {Date} input.today
  * @param {Object<string, Array<Array>>} [input.frozenMonthly] - Existing «شهرياً» rows by month.
- * @returns {{ totals: Array<Array>, monthly: Array<Array> }}
+ * @returns {{ totals: Array<Array>, monthly: Array<Array>, pay: Array<Object> }}
+ *   pay names teachers, so it is for the dashboard only.
  */
 function computePublicStats(input) {
   const today = input.today;
   const activeFrom = new Date(today.getFullYear(), today.getMonth(), today.getDate() - PUBLIC_STATS.ACTIVE_DAYS);
   const halaqat = collectHalaqat(input.halaqat);
   const expenses = readExpenses(input.expenses);
+  const pay = computeTeacherPay(halaqat, readRates(input.rates));
   const teachers = input.teachers.slice().sort((a, b) => (a.code > b.code ? 1 : -1));
   const codeOf = {};
   teachers.forEach(t => { codeOf[t.name] = t.code; });
@@ -203,7 +230,7 @@ function computePublicStats(input) {
     .concat([activeTeachers(halaqat.filter(h => h.date >= activeFrom))]));
   totals.push(_sinceStartRow(halaqat, input.legacy));
 
-  return { totals, monthly: _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, input) };
+  return { totals, monthly: _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, input), pay };
 }
 
 /**
@@ -229,7 +256,7 @@ function _sinceStartRow(halaqat, legacyRows) {
  * month keeps the rows already written for it (S-20).
  * @returns {Array<Array>}
  */
-function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, input) {
+function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, input) {
   const months = Array.from(new Set(halaqat.map(h => h.month))).sort();
   const firstDay = halaqat.length ? halaqat.map(h => h.date).sort((a, b) => a - b)[0] : null;
   const frozen = input.frozenMonthly || {};
@@ -273,13 +300,16 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
 
     const sp = studentPart(academyStudents);
     const hp = halaqaPart(monthHalaqat);
-    const expense = expenses[month];
+    // A teacher without a rate would understate the cost, so it stays blank (S-36).
+    const monthPay = pay.filter(p => p.month === month);
+    const total = monthPay.some(p => p.pay === '') ? ''
+      : monthPay.reduce((a, p) => a + p.pay, 0) + (expenses[month] ? expenses[month].amount : 0);
     rows.push([month, since, PUBLIC_STATS.ACADEMY].concat(sp.cols).concat(hp.cols).concat([
       new Set(monthHalaqat.map(h => h.teacher)).size,
-      expense ? expense.amount : '',
-      expense ? expense.currency : '',
-      expense && hp.hours ? _round(expense.amount / hp.hours) : '',
-      expense && sp.attended ? _round(expense.amount / sp.attended) : '',
+      total,
+      total === '' ? '' : PUBLIC_STATS.CURRENCY,
+      total !== '' && hp.hours ? _round(total / hp.hours) : '',
+      total !== '' && sp.attended ? _round(total / sp.attended) : '',
     ]));
   });
   return rows;
@@ -316,9 +346,7 @@ function refreshPublicStats(year, today) {
 
   const yearFolder = _firstNotTrashed(_findRootFolder().getFoldersByName(sanitizeFilename(y)));
   const ss = _getOrCreatePublicFile(yearFolder, y);
-  const reserved = [REGISTRY.ALIASES_TAB, REGISTRY.EXPENSES_TAB, REGISTRY.HALAQAT_TAB];
-  const teachers = registry.getSheets()
-    .filter(sh => reserved.indexOf(sh.getName()) === -1)
+  const teachers = registryTeacherSheets(registry)
     .map(sh => ({
       name:     sh.getName(),
       code:     _resolveTeacher({ rawTeacherName: sh.getName() }, []).teacherId,
@@ -338,6 +366,7 @@ function refreshPublicStats(year, today) {
     teachers,
     halaqat:  halaqatRows,
     expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
+    rates:    _readBody(registry.getSheetByName(REGISTRY.RATES_TAB)),
     legacy:   _readBody(ss.getSheetByName(PUBLIC_STATS.LEGACY_TAB)),
     today:    now,
     frozenMonthly,
@@ -406,26 +435,23 @@ function _rewriteBody(sheet, firstRow, rows, width) {
 // ============================================================================
 
 /**
- * Saves a month's expense in the registry (S-25): updates the month's row if
- * it exists, else appends one. Called by the dashboard (M5).
+ * Saves a month's other expenses, in pounds, in the registry (S-25, S-36):
+ * updates the month's row if it exists, else appends one. Called by the dashboard.
  * @param {string} month - "yyyy-mm".
  * @param {number|string} amount
- * @param {string} currency - ISO code such as "EUR".
  */
-function saveExpense(month, amount, currency) {
+function saveExpense(month, amount) {
   const m = String(month || '').trim();
   const value = Number(normalizeDigitsAndText(String(amount)).trim());
-  const cur = String(currency || '').trim().toUpperCase();
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) throw new Error('اكتب الشهر بصيغة 2026-10.');
   if (!(value > 0)) throw new Error('المبلغ رقم أكبر من صفر.');
-  if (!/^[A-Z]{3}$/.test(cur)) throw new Error('اختر العملة.');
 
   _withScriptLock(() => {
     const sheet = _registryOrThrow(m.substring(0, 4)).getSheetByName(REGISTRY.EXPENSES_TAB);
     const index = readExpenseMonths(_readBody(sheet)).indexOf(m);
     const row = index === -1 ? sheet.getLastRow() + 1 : index + 2;
     sheet.getRange(row, 1).setNumberFormat('@');
-    sheet.getRange(row, 1, 1, 3).setValues([[m, value, cur]]);
+    sheet.getRange(row, 1, 1, 3).setValues([[m, value, PUBLIC_STATS.CURRENCY]]);
   });
 }
 

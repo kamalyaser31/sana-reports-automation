@@ -675,7 +675,8 @@ function _sampleStatsInput(today, extra) {
       row('r2b', 2026, 9, 3, 'محمد نبيل', 'صباحية', 'أطفال', 60, 0),
       row('r3', 2026, 9, 5, 'أسماء علي', 'مسائية', 'كبار', 90, 2),
     ],
-    expenses: [['2026-10', 500, 'EUR'], ['2026-08', '', 'EUR']],
+    expenses: [['2026-10', 500, 'EGP'], ['2026-08', '', 'EGP']],
+    rates: [['محمد نبيل', 100], ['أسماء علي', 80]],
     legacy: [
       ['2026-09', 'الأكاديمية', 10, 12, 40, 4, 6, 7, 4, 5, 2],
       ['2026-09', 'T001', 6, 7, 20, 3.3, 6, 7, 0, 0, ''],
@@ -709,8 +710,25 @@ function _testPublicStats() {
     _eq(month('2026-10', 'T001').slice(3, 7), [1, 2, 1, 1], 'new, attended, continuing, ratio');
     const ac = month('2026-10', 'الأكاديمية');
     _eq(ac.slice(3, 14), [2, 3, 1, 1, 2, 2.5, 4, 2, 1, 1, 2], 'academy month');
-    _eq(ac.slice(14), [500, 'EUR', 200, 166.67], 'expense, cost per teaching hour, monthly sponsorship');
-    _eq(month('2026-09', 'الأكاديمية').slice(14), ['', '', '', ''], 'empty expense leaves the columns blank');
+    _eq(ac.slice(14), [720, 'EGP', 288, 240], 'expense = pay 220 + other 500; cost per teaching hour; sponsorship');
+    _eq(month('2026-09', 'الأكاديمية').slice(14), [100, 'EGP', 100, 100], 'no other expenses → the pay alone');
+    _eq(month('2026-10', 'T001').slice(14), ['', '', '', ''], 'no expense or pay on teacher rows');
+    const partial = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { rates: [['محمد نبيل', 100]] }));
+    const academy = m => partial.monthly.find(r => r[0] === m && r[2] === PUBLIC_STATS.ACADEMY);
+    _eq(academy('2026-10').slice(14), ['', '', '', ''], 'a teacher with halaqat and no rate blanks the expense');
+    _eq(academy('2026-09').slice(14, 16), [100, 'EGP'], 'a month whose teachers all have rates stays priced');
+
+    _section('المستحقات');
+    _eq(out.pay, [
+      { month: '2026-09', teacher: 'محمد نبيل', hours: 1, rate: 100, pay: 100 },
+      { month: '2026-10', teacher: 'أسماء علي', hours: 1.5, rate: 80, pay: 120 },
+      { month: '2026-10', teacher: 'محمد نبيل', hours: 1, rate: 100, pay: 100 },
+    ], 'pay per teacher and month, resubmission and zero-count reports skipped');
+    _eq(partial.pay[1].rate + '|' + partial.pay[1].pay, '|', 'no rate → rate and pay blank');
+    const odd = computeTeacherPay(collectHalaqat([['x', new Date(2026, 9, 1), 'س', 'صباحية', '1', 'كبار', 50, 3]]), { 'س': 37.5 });
+    _eq(odd[0].pay, 31, 'pay rounded to the pound (50 min × 37.5)');
+    _eq(readRates([['محمد نبيل', 100], ['x', ''], ['y', -5], ['', 9], ['z', '٤٠']]), { 'محمد نبيل': 100 },
+      'blank, non-positive and nameless rates read as no rate');
 
     _section('اللقطة الثابتة');
     _ok(!isMonthFrozen('2026-09', new Date(2026, 9, 5)), 'not frozen on the 5th');
@@ -730,8 +748,8 @@ function _testPublicStats() {
     _ok(error !== '', 'a name in a row is refused');
 
     _section('المصروفات');
-    _eq(readExpenses([['2026-10', 500, 'EUR'], [new Date(2026, 10, 1), 300, 'USD'], ['x', 1, 'EUR']]),
-      { '2026-10': { amount: 500, currency: 'EUR' }, '2026-11': { amount: 300, currency: 'USD' } },
+    _eq(readExpenses([['2026-10', 500, 'EGP'], [new Date(2026, 10, 1), 300, 'EGP'], ['x', 1, 'EGP']]),
+      { '2026-10': { amount: 500, currency: 'EGP' }, '2026-11': { amount: 300, currency: 'EGP' } },
       'expense months read, a date cell becomes yyyy-mm');
   });
 }
@@ -797,7 +815,11 @@ function _testDashboard() {
     _ok(mn[1].isNew && !mn[0].isNew, 'first seen in the last 14 days → new');
     _eq(d.aliases, [{ teacher: 'محمد نبيل', from: 'حمزه عالء', to: 'حمزة علاء', applied: false }], 'aliases listed');
     _eq(d.expenses.map(e => e.month), ['2026-10', '2026-08'], 'expense rows listed');
-    _ok(d.currencies.indexOf('EGP') !== -1, 'currency list sent');
+    _eq(d.currency, 'EGP', 'one currency');
+    _eq([d.teachers.map(t => t.rate), d.unpriced], [[80, 100], []], 'rates per teacher, none missing');
+    _eq(d.pay.length, 3, 'pay rows sent');
+    const noRate = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, { rates: [['محمد نبيل', 100]] }));
+    _eq([noRate.teachers[0].rate, noRate.unpriced], ['', ['أسماء علي']], 'teacher without a rate named');
     const withDetails = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, {
       teachers: [{ name: 'أسماء علي', code: 'T002', detailCols: { birthYear: 0, phone: 1 },
         students: [Object.assign({}, input.teachers[0].students[0], { extra: [2015, '+201001234567'] })] }],
@@ -1060,11 +1082,20 @@ function integrationTest_PublicStats() {
 
   _TEST_MODE = true;
   try {
-    saveExpense('2026-09', '٤٠٠', 'eur');
-    saveExpense('2026-09', 450, 'EUR');
+    saveExpense('2026-09', '٤٠٠');
+    saveExpense('2026-09', 450);
     let refused = '';
-    try { saveExpense('2026-9', 10, 'EUR'); } catch (e) { refused = e.message; }
+    try { saveExpense('2026-9', 10); } catch (e) { refused = e.message; }
     _ok(refused !== '', 'malformed month refused');
+    // 60 pounds an hour makes each teacher's pay their minutes, to check the sum.
+    const teachers = registryTeacherSheets(_findRegistry('2026')).map(sh => sh.getName());
+    saveTeacherRate(teachers[0], '٧٠');
+    teachers.forEach(t => saveTeacherRate(t, 60));
+    const rates = _readBody(_findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB));
+    _eq(rates.filter(r => r[0] === teachers[0]).map(r => r[1]), [60], 'rate updated in place, eastern digits read');
+    refused = '';
+    try { saveTeacherRate(teachers[0], '0'); } catch (e) { refused = e.message; }
+    _ok(refused !== '', 'zero rate refused');
 
     _ok(refreshPublicStats('2026'), 'public file refreshed');
     const ss = SpreadsheetApp.openById(_firstNotTrashed(
@@ -1081,7 +1112,7 @@ function integrationTest_PublicStats() {
     _ok(!cells.some(r => r.some(v => v === 'سمية حمدي')), 'no teacher name in the public file');
     const sept = _readBody(ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB))
       .find(r => String(r[0]) === '2026-09' && r[2] === PUBLIC_STATS.ACADEMY);
-    _eq([sept[14], sept[15]], [450, 'EUR'], 'expense updated in place and shown');
+    _eq([sept[14], sept[15]], [450 + Math.round(sept[8] * 60), 'EGP'], 'expense = pay + other expenses, updated in place');
     const expenses = readExpenseMonths(_readBody(_findRegistry('2026').getSheetByName(REGISTRY.EXPENSES_TAB)));
     _eq(expenses.filter(m => m === '2026-09').length, 1, 'one expense row per month');
   } finally {
@@ -1121,8 +1152,11 @@ function integrationTest_Dashboard() {
     _ok(!afterDelete.aliases.some(a => a.from === typo), 'alias deleted');
     _ok(afterDelete.teachers.find(t => t.name === teacher).students.some(s => s.name === right), 'merged row stays merged');
 
-    const withExpense = dashboardSaveExpense('2026-08', '120', 'USD', '2026');
+    const withExpense = dashboardSaveExpense('2026-08', '120', '2026');
     _ok(withExpense.expenses.some(e => e.month === '2026-08' && e.amount === 120), 'expense saved from the dashboard');
+    const withRate = dashboardSaveRate(teacher, '٥٠', '2026');
+    _eq(withRate.teachers.find(t => t.name === teacher).rate, 50, 'rate saved from the dashboard');
+    _ok(withRate.pay.filter(p => p.teacher === teacher).every(p => p.rate === 50), 'pay uses the new rate');
 
     const key = studentNameKey(right);
     const g = dashboardSetGender(teacher, key, STUDENT_GENDER.MALE, '2026');

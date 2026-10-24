@@ -29,6 +29,7 @@
       <li><a href="#numbers">الأرقام</a></li>
       <li><a href="#students">الطلاب</a></li>
       <li><a href="#fix-name">تصحيح اسم</a></li>
+      <li><a href="#rates">أسعار الساعة والمستحقات</a></li>
       <li><a href="#expenses">المصروفات</a></li>
     </ul>
   </nav>
@@ -222,34 +223,80 @@
       </div>
     </section>
 
-    <!-- 4. Expenses -->
+    <!-- 4. Hourly rates and pay -->
+    <section id="rates" aria-labelledby="rates-h" class="mb-8">
+      <h2 id="rates-h" tabindex="-1" class="text-xl font-bold mb-2">أسعار الساعة والمستحقات</h2>
+      <p class="mb-2">سعر الساعة بالجنيه، واحد لكل حلقات المعلم. ويُحسب بالسعر الحالي كل شهر لم يثبت بعد في الملف العام.</p>
+      <p x-show="data.unpriced.length" class="font-bold mb-2"
+         x-text="'لا سعر لـ: ' + data.unpriced.join('، ') + '. فمصروف الأشهر التي لهم فيها حلقات يبقى فارغاً في الملف العام حتى يُكتب سعرهم.'"></p>
+      <div class="overflow-x-auto">
+        <table class="text-sm">
+          <caption>سعر الساعة لكل معلم</caption>
+          <thead><tr><th scope="col">المعلم</th><th scope="col">سعر الساعة (جنيه)</th></tr></thead>
+          <tbody>
+            <template x-for="(t, i) in data.teachers" :key="t.name">
+              <tr>
+                <th scope="row" x-text="t.name"></th>
+                <td>
+                  <label :for="'rate-' + i" class="sr-only" x-text="'سعر ساعة ' + t.name + ' بالجنيه'"></label>
+                  <input :id="'rate-' + i" type="text" inputmode="decimal" x-model="rates[t.name]"
+                         placeholder="لا سعر" class="border border-gray-700 p-1 w-24">
+                  <button type="button" class="border border-gray-900 px-2 ms-1 disabled:opacity-50"
+                          :disabled="busy || !rates[t.name] || rates[t.name].trim() === String(t.rate)"
+                          :aria-label="'احفظ سعر ساعة ' + t.name"
+                          @click="saveRate(t)">احفظ</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-4">
+        <label for="pay-month" class="font-bold block">شهر المستحقات</label>
+        <select id="pay-month" x-model="payMonth" class="border border-gray-700 p-1">
+          <template x-for="m in payMonths()" :key="m"><option :value="m" :selected="m === payMonth" x-text="m"></option></template>
+        </select>
+      </div>
+      <div class="overflow-x-auto mt-2" x-show="payRows().length">
+        <table class="text-sm">
+          <caption x-text="'مستحقات المعلمين في ' + payMonth + ' بالجنيه'"></caption>
+          <thead><tr><th scope="col">المعلم</th><th scope="col">الساعات</th><th scope="col">السعر</th><th scope="col">المستحق</th></tr></thead>
+          <tbody>
+            <template x-for="p in payRows()" :key="p.teacher">
+              <tr><th scope="row" x-text="p.teacher"></th><td x-text="p.hours"></td>
+                <td x-text="p.rate === '' ? 'لا سعر' : p.rate"></td><td x-text="p.pay === '' ? 'لا سعر' : p.pay"></td></tr>
+            </template>
+            <tr><th scope="row">المجموع</th><td x-text="payTotal().hours"></td><td></td>
+              <td x-text="payTotal().pay"></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p x-show="!payRows().length" class="mt-2">لا حلقات بعد.</p>
+    </section>
+
+    <!-- 5. Other expenses -->
     <section id="expenses" aria-labelledby="exp-h" class="mb-8">
       <h2 id="exp-h" tabindex="-1" class="text-xl font-bold mb-2">المصروفات</h2>
+      <p class="mb-2">المصروفات الأخرى بالجنيه، غير مستحقات المعلمين. ومصروف الشهر في الأرقام مجموعهما.</p>
       <form @submit.prevent="saveExpense()" class="flex flex-wrap gap-4 items-end">
         <div>
           <label for="exp-month" class="font-bold block">الشهر</label>
           <input id="exp-month" type="month" x-model="expMonth" required class="border border-gray-700 p-1">
         </div>
         <div>
-          <label for="exp-amount" class="font-bold block">المبلغ</label>
+          <label for="exp-amount" class="font-bold block">المبلغ بالجنيه</label>
           <input id="exp-amount" type="text" inputmode="decimal" x-model="expAmount" required class="border border-gray-700 p-1">
-        </div>
-        <div>
-          <label for="exp-currency" class="font-bold block">العملة</label>
-          <select id="exp-currency" x-model="expCurrency" class="border border-gray-700 p-1">
-            <template x-for="c in data.currencies" :key="c"><option :value="c" :selected="c === expCurrency" x-text="c"></option></template>
-          </select>
         </div>
         <button type="submit" class="border-2 border-gray-900 px-3 py-1 font-bold" :disabled="busy">احفظ المصروف</button>
       </form>
       <p class="mt-1">إن كُتب الشهر من قبل عُدّل مصروفه ولم يتكرر.</p>
       <div class="overflow-x-auto mt-3">
         <table class="text-sm">
-          <caption>مصروفات السنة</caption>
-          <thead><tr><th scope="col">الشهر</th><th scope="col">المبلغ</th><th scope="col">العملة</th></tr></thead>
+          <caption>المصروفات الأخرى في السنة بالجنيه</caption>
+          <thead><tr><th scope="col">الشهر</th><th scope="col">المبلغ</th></tr></thead>
           <tbody>
             <template x-for="e in data.expenses" :key="e.month">
-              <tr><th scope="row" x-text="e.month"></th><td x-text="e.amount"></td><td x-text="e.currency"></td></tr>
+              <tr><th scope="row" x-text="e.month"></th><td x-text="e.amount"></td></tr>
             </template>
           </tbody>
         </table>
@@ -281,7 +328,8 @@
       month: '', teacher: '', search: '', absentDays: '0', genders: {},
       details: {},
       aliasFrom: '', aliasMode: 'list', aliasToList: '', aliasToTyped: '', review: null, pendingDelete: -1,
-      expMonth: '', expAmount: '', expCurrency: 'EGP',
+      rates: {}, payMonth: '',
+      expMonth: '', expAmount: '',
 
       init() {
         const start = (params) => {
@@ -325,7 +373,10 @@
         if (!data.teachers.some(t => t.name === this.teacher)) this.teacher = data.teachers.length ? data.teachers[0].name : '';
         const months = this.months();
         if (months.indexOf(this.month) === -1) this.month = months.length ? months[months.length - 1] : '';
-        if (!this.expCurrency && data.currencies.length) this.expCurrency = data.currencies[0];
+        this.rates = {};
+        data.teachers.forEach(t => { this.rates[t.name] = String(t.rate); });
+        const payMonths = this.payMonths();
+        if (payMonths.indexOf(this.payMonth) === -1) this.payMonth = payMonths.length ? payMonths[payMonths.length - 1] : '';
         this.pendingDelete = -1;
       },
 
@@ -353,6 +404,18 @@
         const min = Number(this.absentDays);
         return this.currentStudents().filter(s =>
           (!q || this.nameKey(s.name).indexOf(q) !== -1) && (!min || this.daysAway(s) > min));
+      },
+      payMonths() {
+        return this.data ? Array.from(new Set(this.data.pay.map(p => p.month))).sort() : [];
+      },
+      payRows() {
+        return this.data ? this.data.pay.filter(p => p.month === this.payMonth) : [];
+      },
+      payTotal() {
+        const rows = this.payRows();
+        const hours = Math.round(rows.reduce((a, p) => a + p.hours, 0) * 100) / 100;
+        const unpriced = rows.some(p => p.pay === '');
+        return { hours, pay: unpriced ? 'ناقص: بعضهم بلا سعر' : rows.reduce((a, p) => a + p.pay, 0) };
       },
       focusEl(id) {
         const el = document.getElementById(id);
@@ -417,8 +480,12 @@
         this.call('dashboardDeleteAlias', [a.teacher, a.from, this.year], 'حُذف البديل «' + a.from + '».');
       },
 
+      saveRate(t) {
+        const rate = this.rates[t.name].trim();
+        this.call('dashboardSaveRate', [t.name, rate, this.year], 'حُفظ سعر ساعة ' + t.name + ': ' + rate + ' جنيه.');
+      },
       saveExpense() {
-        this.call('dashboardSaveExpense', [this.expMonth, this.expAmount, this.expCurrency, this.year],
+        this.call('dashboardSaveExpense', [this.expMonth, this.expAmount, this.year],
           'حُفظ مصروف ' + this.expMonth + '.');
       },
     };
