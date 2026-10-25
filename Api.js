@@ -202,7 +202,7 @@ function _runWrite(write, request, name, payOpen) {
   const details = write.details(request.args, result);
   try {
     _withMode(request.test, () => {
-      if (write.log === 'rates') appendRateLog(name, details);
+      if (write.log === 'rates') appendRateLog(name, write.label, details);
       else appendEditLog(request.year, name, write.label, details);
     });
     // The returned data was read before this row existed; add it rather than read everything again.

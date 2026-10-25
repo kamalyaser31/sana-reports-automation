@@ -703,6 +703,14 @@ function _testPublicStats() {
     _eq(ac.slice(14), [920, 'EGP', 368, 306.67],
       'expense = pay 220 + fixed 200 + other 500; ÷ 2.5 sheet hours; sponsorship over 3 students');
     _eq(month('2026-09', 'الأكاديمية').slice(14), ['', '', '', ''], 'no expense before October 2026 (S-50)');
+    const base = _sampleStatsInput(new Date(2026, 9, 20));
+    const listed = computePublicStats(Object.assign(base, { sheetHalaqat: base.sheetHalaqat.concat([
+      { teacher: 'رجاء لطفي', date: new Date(2026, 8, 9), month: '2026-09', category: 'كبار', minutes: 480, attendance: 4 },
+      { teacher: 'رجاء لطفي', date: new Date(2026, 9, 9), month: '2026-10', category: 'كبار', minutes: 60, attendance: 4 },
+    ]) }));
+    const academyOf = (stats, m) => stats.monthly.find(r => r[0] === m && r[2] === PUBLIC_STATS.ACADEMY);
+    _eq([academyOf(listed, '2026-09')[7], academyOf(listed, '2026-10')[7]], [1, 3],
+      'September counts only its listed teachers; October counts everyone (S-54)');
     const sample = _sampleStatsInput(new Date(2026, 9, 20));
     const lateStart = computePublicStats(Object.assign(sample, {
       sheetHalaqat: sample.sheetHalaqat.slice(1),
@@ -829,22 +837,19 @@ function _testDashboard() {
     _eq(d.currency, 'EGP', 'one currency');
     _eq([d.pay, d.teachers.map(t => t.rate), d.rateLog], [null, ['', ''], []], 'no rates or pay without the pay password');
     const open = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true,
-      rateLog: [[new Date(2026, 9, 25, 10, 0), 'منى', 'محمد نبيل: 100']] }, input));
+      rateLog: [[new Date(2026, 9, 25, 10, 0), 'منى', RATE_LOG_ACTION, 'محمد نبيل: 100']] }, input));
     _eq([open.teachers.map(t => t.rate), open.unpriced], [[80, 100], []], 'rates per teacher once unlocked, none missing');
     _eq([open.pay.length, open.rateLog[0].details], [2, 'محمد نبيل: 100'], 'pay rows and rate log sent once unlocked');
     _eq([d.fixed, open.fixed], [null, [{ item: 'الهدايا والتكريمات', amount: 200 }, { item: 'إدارة الأكاديمية', amount: '' }]],
       'fixed expenses only once unlocked');
     const fixedLog = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
-      { rateLog: [[new Date(2026, 9, 25, 9), 'منى', 'إدارة الأكاديمية: 900'], [new Date(2026, 9, 25, 8), 'منى', 'محمد نبيل: 100']] }));
+      { rateLog: [[new Date(2026, 9, 25, 9), 'منى', FIXED_LOG_ACTION, 'إدارة الأكاديمية: 900'], [new Date(2026, 9, 25, 8), 'منى', RATE_LOG_ACTION, 'محمد نبيل: 100']] }));
     _eq(fixedLog.rateLog.map(e => e.action), [RATE_LOG_ACTION, FIXED_LOG_ACTION], 'rates log rows named by kind, newest first');
     const withSheet = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
       { teachers: input.teachers.concat([{ name: 'رجاء لطفي', code: 'T004', students: [] }]) }));
-    _eq(withSheet.rateTeachers.map(t => t.name), ['أسماء علي', 'رجاء لطفي', 'محمد نبيل'],
+    _eq(withSheet.teachers.map(t => t.name), ['أسماء علي', 'رجاء لطفي', 'محمد نبيل'],
       'rate list holds every academy teacher, one without students too');
-    _eq(d.rateTeachers.map(t => t.rate), ['', ''], 'rate list has no amounts before the pay password');
-    const oldLog = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, {
-      log: [[new Date(), 'منى', RATE_LOG_ACTION, 'محمد نبيل: 100'], [new Date(), 'منى', 'مصروف', '2026-10: 5']] }));
-    _eq(oldLog.log.map(e => e.action), ['مصروف'], 'old rate rows kept out of the shared log');
+    _eq(withSheet.teachers[1].rate, '', 'a teacher without a rate has none');
     const noRate = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
       { rates: [['محمد نبيل', 100]] }));
     _eq([noRate.teachers[0].rate, noRate.unpriced], ['', ['أسماء علي']], 'teacher without a rate named');
@@ -1216,14 +1221,14 @@ function integrationTest_PublicStats() {
       .concat(sheetHalaqat.map(h => h.teacher))));
     const oldTab = () => _findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB);
     const registryRatesBefore = oldTab() ? JSON.stringify(_readBody(oldTab())) : '';
-    saveTeacherRate(teachers[0], '٧٠');
-    teachers.forEach(t => saveTeacherRate(t, 60));
+    saveTeacherRates([{ teacher: teachers[0], rate: '٧٠' }]);
+    saveTeacherRates(teachers.map(teacher => ({ teacher, rate: 60 })));
     const rates = readRateRows();
     _eq(oldTab() ? JSON.stringify(_readBody(oldTab())) : '', registryRatesBefore,
       'rates not written to the shared registry');
     _eq(rates.filter(r => r[0] === teachers[0]).map(r => r[1]), [60], 'rate updated in place, eastern digits read');
     refused = '';
-    try { saveTeacherRate(teachers[0], '0'); } catch (e) { refused = e.message; }
+    try { saveTeacherRates([{ teacher: teachers[0], rate: '0' }]); } catch (e) { refused = e.message; }
     _ok(refused !== '', 'zero rate refused');
     refused = '';
     try { saveTeacherRates([{ teacher: teachers[0], rate: 55 }, { teacher: teachers[0], rate: '' }]); } catch (e) { refused = e.message; }
@@ -1231,7 +1236,7 @@ function integrationTest_PublicStats() {
       'one bad rate in a batch saves none');
     saveFixedExpenses([{ item: 'الهدايا والتكريمات', amount: '١٠٠' }, { item: 'إدارة الأكاديمية', amount: '' }]);
     refused = '';
-    try { saveFixedExpense('إيجار', 10); } catch (e) { refused = e.message; }
+    try { saveFixedExpenses([{ item: 'إيجار', amount: 10 }]); } catch (e) { refused = e.message; }
     _ok(refused !== '', 'unknown fixed item refused');
     const fixed = readFixedExpenses(readFixedRows());
     _eq(fixed['الهدايا والتكريمات'], 100, 'fixed expense saved in the rates file, eastern digits read');

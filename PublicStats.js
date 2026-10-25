@@ -25,6 +25,11 @@ const PUBLIC_STATS = {
   // Pay, fixed expenses and the month's expense start here (S-50, S-51).
   PAY_FROM:     '2026-10',
   FIXED_ITEMS:  ['الهدايا والتكريمات', 'إدارة الأكاديمية'],
+  // A month listed here counts only these teachers' halaqat: the other
+  // reports of September 2026 had errors (S-54).
+  MONTH_TEACHERS: {
+    '2026-09': ['محمد نبيل', 'أسماء علي', 'سارة العدل', 'فاطمة إبراهيم'],
+  },
   SHEET_HOURS_SECONDS: 600,
   TOTALS_HEADERS: [
     'المعلم', 'عدد الطلاب الكلي', 'الطلاب النشطون', 'الذكور', 'الإناث', 'عدد الحلقات',
@@ -222,7 +227,10 @@ function computePublicStats(input) {
   // Halaqat are the teachers' sheets' (S-53); students the registry's, as the
   // sheets hold counts, not names. The registry's first day is when students
   // began to be counted.
-  const halaqat = input.sheetHalaqat || [];
+  const halaqat = (input.sheetHalaqat || []).filter(h => {
+    const only = PUBLIC_STATS.MONTH_TEACHERS[h.month];
+    return !only || only.indexOf(h.teacher) !== -1;
+  });
   const studentDays = [].concat(...input.teachers.map(t => [].concat(...t.students
     .map(s => Object.keys(s.slots).map(k => k.split('|')[0]))))).sort();
   const studentsFrom = studentDays.length ? studentDays[0] : '';

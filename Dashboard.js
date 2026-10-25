@@ -69,11 +69,8 @@ function buildDashboardData(input) {
     totals: named(stats.totals),
     monthly: named(stats.monthly),
     pay: input.showPay ? stats.pay : null,
-    // The rates log keeps no action column; a fixed item's name opens its row (S-51).
-    rateLog: input.showPay ? rowsToEditLog((input.rateLog || []).map(r => [r[0], r[1],
-      PUBLIC_STATS.FIXED_ITEMS.some(i => String(r[2]).indexOf(`${i}:`) === 0) ? FIXED_LOG_ACTION : RATE_LOG_ACTION, r[2]])) : [],
+    rateLog: input.showPay ? rowsToEditLog(input.rateLog) : [],
     unpriced: Array.from(new Set(stats.pay.filter(p => p.pay === '').map(p => p.teacher))).sort(),
-    rateTeachers: input.teachers.map(t => t.name).sort().map(name => ({ name, rate: input.showPay ? (rates[name] || '') : '' })),
     fixed: input.showPay ? PUBLIC_STATS.FIXED_ITEMS.map(item => ({ item, amount: fixed[item] || '' })) : null,
     teachers: input.teachers.map(t => ({
       name: t.name,
@@ -94,8 +91,7 @@ function buildDashboardData(input) {
         };
       }),
     })).sort((a, b) => (a.name > b.name ? 1 : -1)),
-    // Rate rows written before S-48 stay out of the shared log.
-    log: rowsToEditLog((input.log || []).filter(r => r[2] !== RATE_LOG_ACTION)),
+    log: rowsToEditLog(input.log),
     aliases: rowsToAliases(input.aliases).map(a => ({
       teacher: a.teacher, from: a.from, to: a.to, applied: a.applied,
     })),

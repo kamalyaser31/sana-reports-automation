@@ -752,7 +752,7 @@ const RATES_FILE = {
   LOG_TAB:     'سجل الأسعار',
   FIXED_TAB:   'المصروفات الثابتة',
   HEADERS:     ['المعلم', 'السعر'],
-  LOG_HEADERS: ['الوقت', 'الاسم', 'التفاصيل'],
+  LOG_HEADERS: ['الوقت', 'الاسم', 'الفعل', 'التفاصيل'],
   FIXED_HEADERS: ['البند', 'المبلغ'],
 };
 
@@ -842,18 +842,14 @@ function saveFixedExpenses(list) {
   });
 }
 
-/** One fixed expense; see saveFixedExpenses. */
-function saveFixedExpense(item, amount) {
-  saveFixedExpenses([{ item, amount }]);
-}
-
 /**
  * @param {string} name - As typed by the admin at login.
+ * @param {string} action
  * @param {string} details
  */
-function appendRateLog(name, details) {
+function appendRateLog(name, action, details) {
   const sheet = _getOrCreateRatesFile().getSheetByName(RATES_FILE.LOG_TAB);
-  sheet.appendRow([new Date(), name, details]);
+  sheet.appendRow([new Date(), name, action, details]);
   sheet.getRange(sheet.getLastRow(), 1).setNumberFormat('dd-mm-yyyy hh:mm');
 }
 
@@ -1142,11 +1138,6 @@ function saveTeacherRates(list, year) {
     });
     _upsertRows(_getOrCreateRatesFile().getSheetByName(RATES_FILE.RATES_TAB), rows);
   });
-}
-
-/** One teacher's rate; see saveTeacherRates. */
-function saveTeacherRate(teacher, rate, year) {
-  saveTeacherRates([{ teacher, rate }], year);
 }
 
 /**
