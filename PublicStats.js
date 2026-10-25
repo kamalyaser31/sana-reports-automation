@@ -138,15 +138,15 @@ function readExpenses(rows) {
  * @param {string} teacher - Teacher tab name.
  * @param {string} month - "yyyy-mm" of the tab.
  * @returns {Array<Object>} teacher, date, month, category, minutes, attendance,
- *   duplicate, and the cells as shown: dateText, session, duration, students, notes.
+ *   duplicate, the cells as shown (dateText, session, duration, students, notes),
+ *   and the sheet row with its stamp, for an edit from the dashboard (S-59).
  */
 function teacherSheetReports(rows, teacher, month) {
-  const summary = new Set(['الإجمالي', 'المتوسط']);
   const [y, m] = month.split('-').map(Number);
-  const text = v => String(v === undefined || v === null ? '' : v).trim();
+  const text = _cellText;
   const out = [];
-  (rows || []).forEach(r => {
-    if (summary.has(text(r[0])) || r.slice(0, 6).every(v => text(v) === '')) return;
+  (rows || []).forEach((r, i) => {
+    if (REPORT_SUMMARY_LABELS.has(text(r[0])) || r.slice(0, 6).every(v => text(v) === '')) return;
     const d = text(r[3]);
     const hm = /^(\d+):(\d{1,2})/.exec(d);
     // A plain number is a day fraction, as Sheets stores a duration.
@@ -155,9 +155,30 @@ function teacherSheetReports(rows, teacher, month) {
       category: text(r[2]), minutes,
       attendance: Number(normalizeDigitsAndText(text(r[4]))) || 0,
       duplicate: text(r[5]).indexOf('(تقرير مكرر)') === 0,
-      dateText: text(r[0]), session: text(r[1]), duration: d, students: text(r[4]), notes: text(r[5]) });
+      dateText: text(r[0]), session: text(r[1]), duration: d, students: text(r[4]), notes: text(r[5]),
+      row: i + 2, stamp: reportRowStamp(r) });
   });
   return out;
+}
+
+const REPORT_SUMMARY_LABELS = new Set(['الإجمالي', 'المتوسط']);
+
+function _cellText(v) {
+  return String(v === undefined || v === null ? '' : v).trim();
+}
+
+/**
+ * A short fingerprint of a row's six cells. The page sends it back with an edit,
+ * and the server refuses the edit if the row has changed since (S-59); the notes
+ * never travel, as a request cuts and flattens long text.
+ * @param {Array} cells
+ * @returns {string}
+ */
+function reportRowStamp(cells) {
+  const s = Array.from({ length: 6 }, (_, i) => _cellText(cells[i])).join('\u0001');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
 }
 
 /** The sheet a report without a teacher's name is written to (CONFIG.FALLBACKS). */
@@ -461,11 +482,33 @@ function academyTeachers(registry, sheetReports) {
  */
 function readTeacherSheetReports(year, fresh) {
   const cache = CacheService.getScriptCache();
-  const key = `sheet_reports_${year}`;
+  const key = _sheetReportsKey(year);
   const hit = _TEST_MODE || fresh ? null : _cacheGetJson(cache, key);
   // JSON turns each Date into text; it is made a Date again.
   if (hit) return hit.map(h => Object.assign(h, { date: new Date(h.date) }));
 
+  const out = [];
+  _teacherSheetFiles(year).forEach(f => {
+    SpreadsheetApp.openById(f.id).getSheets().forEach(sheet => {
+      const month = _tabMonth(sheet.getName(), year);
+      if (month) _readTab(sheet, f.teacher, month).forEach(h => out.push(h));
+    });
+  });
+  if (!_TEST_MODE) _cachePutJson(cache, key, out, PUBLIC_STATS.SHEET_HOURS_SECONDS);
+  return out;
+}
+
+function _sheetReportsKey(year) {
+  return `sheet_reports_${year}`;
+}
+
+/**
+ * The teachers' yearly sheets in the year folder, the first file of a teacher
+ * only, so the reader and an edit always open the same file.
+ * @param {string} year
+ * @returns {Array<{teacher: string, id: string}>}
+ */
+function _teacherSheetFiles(year) {
   const root = _findRootFolder();
   const yearFolder = root && _firstNotTrashed(root.getFoldersByName(sanitizeFilename(year)));
   const suffix = ` - تقارير الحلقات ${year}`;
@@ -481,17 +524,131 @@ function readTeacherSheetReports(year, fresh) {
       const teacher = _teacherTabName(name.slice(0, -suffix.length));
       if (seen.has(teacher)) continue;
       seen.add(teacher);
-      SpreadsheetApp.openById(file.getId()).getSheets().forEach(sheet => {
-        const m = /^(\d{1,2})\s*-/.exec(sheet.getName());
-        const month = m ? `${year}-${m[1].padStart(2, '0')}` : '';
-        if (!month || sheet.getLastRow() < 2) return;
-        const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues();
-        teacherSheetReports(rows, teacher, month).forEach(h => out.push(h));
-      });
+      out.push({ teacher, id: file.getId() });
     }
   }
-  if (!_TEST_MODE) _cachePutJson(cache, key, out, PUBLIC_STATS.SHEET_HOURS_SECONDS);
   return out;
+}
+
+/** "yyyy-mm" of a monthly tab such as "10 - أكتوبر", or '' for any other tab. */
+function _tabMonth(tabName, year) {
+  const m = /^(\d{1,2})\s*-/.exec(tabName);
+  return m ? `${year}-${m[1].padStart(2, '0')}` : '';
+}
+
+function _readTab(sheet, teacher, month) {
+  if (sheet.getLastRow() < 2) return [];
+  return teacherSheetReports(sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues(), teacher, month);
+}
+
+// ============================================================================
+// EDITING A REPORT FROM THE DASHBOARD (S-59)
+// ============================================================================
+
+/**
+ * The new duration and student count of a report, checked as the teachers' app
+ * checks them: a whole duration of 1 minute to 5 hours, and a whole count.
+ * @param {{hours: *, minutes: *, students: *}} change
+ * @returns {{minutes: number, students: number}}
+ */
+function parseReportEdit(change) {
+  const read = v => normalizeDigitsAndText(String(v === undefined || v === null ? '' : v)).trim();
+  const hours = read(change.hours) || '0';
+  const minutes = read(change.minutes) || '0';
+  const students = read(change.students);
+  if (!/^\d+$/.test(hours) || !/^\d+$/.test(minutes) || Number(minutes) > 59) {
+    throw new Error('اكتب الساعات رقماً صحيحاً، والدقائق من 0 إلى 59.');
+  }
+  const total = Number(hours) * 60 + Number(minutes);
+  if (total < 1 || total > 300) throw new Error('مدة الحصة من دقيقة إلى 5 ساعات.');
+  if (!/^\d+$/.test(students)) throw new Error('عدد الطلاب رقم صحيح، صفر فأكثر.');
+  return { minutes: total, students: Number(students) };
+}
+
+/** "h:mm" of a number of minutes, as the sheet shows a duration. */
+function _durationText(minutes) {
+  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`;
+}
+
+/**
+ * The row a dashboard edit points at, after checking it is still the row the
+ * page showed. Runs under the script lock.
+ * @param {{teacher: string, month: string, row: *, stamp: string}} ref
+ * @param {string} year
+ * @param {Date} today
+ * @returns {{sheet: Object, row: number, cells: Array<string>}}
+ */
+function _openReportRow(ref, year, today) {
+  const month = String(ref.month || '');
+  if (!/^\d{4}-\d{2}$/.test(month) || month.slice(0, 4) !== year) throw new Error('شهر التقرير غير معروف.');
+  if (isMonthFrozen(month, today)) {
+    throw new Error(`شهر ${month} ثابت بعد الخامس من الشهر التالي، فلا يُعدَّل تقريره ولا يُحذف.`);
+  }
+  const file = _teacherSheetFiles(year).find(f => f.teacher === ref.teacher);
+  if (!file) throw new Error('لم يوجد شيت هذا المعلم.');
+  const sheet = SpreadsheetApp.openById(file.id).getSheets().find(s => _tabMonth(s.getName(), year) === month);
+  const row = Number(ref.row);
+  const stale = new Error('تغيّر هذا التقرير منذ حُمّلت الصفحة؛ اضغط «حدّث التقارير» ثم أعد المحاولة.');
+  if (!sheet || !Number.isInteger(row) || row < 2 || row > sheet.getLastRow()) throw stale;
+  const cells = sheet.getRange(row, 1, 1, 6).getDisplayValues()[0].map(_cellText);
+  if (REPORT_SUMMARY_LABELS.has(cells[0]) || reportRowStamp(cells) !== ref.stamp) throw stale;
+  return { sheet, row, cells };
+}
+
+/**
+ * Writes a new duration and student count into a report row.
+ * @param {Object} ref - As _openReportRow.
+ * @param {Object} change - As parseReportEdit.
+ * @param {string} year
+ * @returns {{before: Array<string>, after: {duration: string, students: number}}}
+ */
+function editTeacherReport(ref, change, year) {
+  const value = parseReportEdit(change);
+  return _withScriptLock(() => {
+    const { sheet, row, cells } = _openReportRow(ref, year, new Date());
+    // A day fraction, as the pipeline writes it, so the total formulas add it.
+    sheet.getRange(row, 4).setValue(value.minutes / 1440).setNumberFormat('[h]:mm');
+    sheet.getRange(row, 5).setValue(value.students).setNumberFormat('0');
+    _refreshCachedTab(sheet, ref.teacher, ref.month, year);
+    return { before: cells, after: { duration: _durationText(value.minutes), students: value.students } };
+  });
+}
+
+/**
+ * Erases a report row from its sheet, and rebuilds the total and average rows:
+ * Sheets would leave «#REF!» in them when the tab's only report goes.
+ * @param {Object} ref - As _openReportRow.
+ * @param {string} year
+ * @returns {{before: Array<string>}}
+ */
+function deleteTeacherReport(ref, year) {
+  return _withScriptLock(() => {
+    const { sheet, row, cells } = _openReportRow(ref, year, new Date());
+    removeSummaryRows(sheet);
+    sheet.deleteRow(row);
+    appendSummaryRows(sheet);
+    _refreshCachedTab(sheet, ref.teacher, ref.month, year);
+    return { before: cells };
+  });
+}
+
+/**
+ * Puts the edited tab's rows into the cached reports in place, so the page sees
+ * the change without reading every sheet again; the rows below a deleted one
+ * get their new row numbers too.
+ */
+function _refreshCachedTab(sheet, teacher, month, year) {
+  if (_TEST_MODE) return;
+  const cache = CacheService.getScriptCache();
+  const key = _sheetReportsKey(year);
+  const hit = _cacheGetJson(cache, key);
+  if (!hit) return;
+  const inTab = h => h.teacher === teacher && h.month === month;
+  const at = hit.findIndex(inTab);
+  const rest = hit.filter(h => !inTab(h));
+  const fresh = _readTab(sheet, teacher, month);
+  rest.splice.apply(rest, [at === -1 ? rest.length : at, 0].concat(fresh));
+  _cachePutJson(cache, key, rest, PUBLIC_STATS.SHEET_HOURS_SECONDS);
 }
 
 /**

@@ -98,6 +98,8 @@ function buildDashboardData(input) {
       date: r.dateText, session: r.session, category: r.category, duration: r.duration,
       students: r.students, notes: r.notes, minutes: r.minutes, attendance: r.attendance,
       status: isCountedReport(r) ? '' : (r.duplicate ? 'مكرر' : 'لا يُحسب'),
+      // Where an edit writes, and whether it may (S-59).
+      row: r.row, stamp: r.stamp, editable: !isMonthFrozen(r.month, input.today),
     })),
     aliases: rowsToAliases(input.aliases).map(a => ({
       teacher: a.teacher, from: a.from, to: a.to, applied: a.applied,
@@ -262,6 +264,33 @@ function dashboardSetDetails(teacher, key, details, year, test) {
     try {
       setStudentDetails(teacher, key, details, year);
       return _getDashboardData(year);
+    } catch (error) {
+      throw _friendlyError(error);
+    }
+  });
+}
+
+/**
+ * Edits or erases one report row of a teacher's sheet (S-59).
+ * @param {{teacher: string, month: string, row: *, stamp: string}} ref
+ * @returns {Object} { before, after?, data }
+ */
+function dashboardEditReport(ref, change, year, test) {
+  return _withMode(test, () => {
+    try {
+      const result = editTeacherReport(ref, change, year);
+      return Object.assign(result, { data: _getDashboardData(year) });
+    } catch (error) {
+      throw _friendlyError(error);
+    }
+  });
+}
+
+function dashboardDeleteReport(ref, year, test) {
+  return _withMode(test, () => {
+    try {
+      const result = deleteTeacherReport(ref, year);
+      return Object.assign(result, { data: _getDashboardData(year) });
     } catch (error) {
       throw _friendlyError(error);
     }

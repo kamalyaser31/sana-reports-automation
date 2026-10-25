@@ -750,6 +750,18 @@ function _testPublicStats() {
     const shown = teacherSheetReports([['الاثنين، ١٢ أكتوبر ٢٠٢٦', 'مسائية (حلقة 1)', 'كبار', '1:30', '٣', 'ملاحظة']], 'س', '2026-10')[0];
     _eq([shown.dateText, shown.session, shown.duration, shown.students, shown.notes],
       ['الاثنين، ١٢ أكتوبر ٢٠٢٦', 'مسائية (حلقة 1)', '1:30', '٣', 'ملاحظة'], 'cells kept as the sheet shows them');
+    const kept = ['03-10-2026', 'صباحية', 'كبار', '1:00', '2', ''];
+    const rowed = teacherSheetReports([['', '', '', '', '', ''], kept, ['الإجمالي', '', '', '1:00', '2', '']], 'س', '2026-10');
+    _eq(rowed.map(h => [h.row, h.stamp]), [[3, reportRowStamp(kept)]],
+      'a report keeps its sheet row and the stamp of its cells (S-59)');
+    _ok(reportRowStamp(kept) !== reportRowStamp(kept.slice(0, 3).concat(['1:30', '2', ''])), 'the stamp changes with a cell');
+    _eq(parseReportEdit({ hours: '١', minutes: '٣٠', students: '٤' }), { minutes: 90, students: 4 }, 'edit reads Arabic digits');
+    _eq(parseReportEdit({ hours: '5', minutes: '', students: '0' }), { minutes: 300, students: 0 }, 'five hours and no students accepted');
+    const editRefusals = [['5', '1', '1'], ['0', '0', '1'], ['1', '60', '1'], ['1.5', '0', '1'], ['1', '0', ''], ['1', '0', '-1']]
+      .filter(([hours, minutes, students]) => {
+        try { parseReportEdit({ hours, minutes, students }); return true; } catch (e) { return false; }
+      });
+    _eq(editRefusals, [], 'over five hours, zero, 60 minutes, fractions and a missing count refused');
     const tab = [
       ['29-08-2026', 'تجويد', 'كبار', '1:00', '8', ''],
       ['الثلاثاء، ٢٩ أغسطس ٢٠٢٦', 'تجويد', 'كبار', '1:30', '8', 'ملاحظة'],
@@ -1463,6 +1475,62 @@ function integrationTest_Api() {
   _eq([reply.ok, reply.error], [false, 'طلب غير مفهوم.'], 'doPost answers a bad body with JSON');
 }
 
+/** اختبار تكاملي — تعديل تقرير وحذفه من اللوحة (S-59). */
+function integrationTest_ReportEdits() {
+  const tag = String(Date.now()).slice(-6);
+  const teacher = 'سمية حمدي';
+  const now = new Date();
+  const year = String(now.getFullYear());
+  const pad = n => String(n).padStart(2, '0');
+  _runIntegrationSubmission({
+    'اسم المعلم': teacher, 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '0',
+    'التقرير': _buildTestReport(`${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${year}`, 'صباحية', 2, `${tag}7`,
+      _sampleStudentText([{ name: `ياسر ${tag}` }])),
+    'ملاحظات خاصة للإدارة': '',
+  });
+  const deps = { password: `pass-${tag}`, payPassword: `pay-${tag}`, cache: _memoryCache(),
+    loginLock: LockService.getDocumentLock() || LockService.getUserLock() };
+  const call = (action, args, token) => handleApiRequest(
+    { action, token: token || '', test: true, year, args: args || {} }, deps);
+  const refusal = (action, args) => {
+    try { call(action, args, token); return ''; } catch (e) { return e.message; }
+  };
+  const token = call('login', { name: `مختبر ${tag}`, password: deps.password }).token;
+  const mine = d => d.reports.find(r => r.teacher === teacher && r.session === `صباحية (حلقة ${tag}7)`);
+
+  const data = call('data', {}, token).data;
+  const shown = mine(data);
+  _ok(shown && shown.editable && shown.row >= 2 && shown.stamp, 'a report of this month carries its row and stamp');
+  _ok(data.reports.filter(r => isMonthFrozen(r.month, now)).every(r => !r.editable), 'frozen months shown without edits');
+  const ref = { teacher, month: shown.month, row: shown.row, stamp: shown.stamp };
+  const change = { hours: '1', minutes: '30', students: '3' };
+  _has(refusal('editReport', Object.assign({}, ref, change, { stamp: 'x' })), 'حدّث التقارير', 'a changed row is refused');
+  _has(refusal('editReport', Object.assign({}, ref, change, { hours: '6' })), '5 ساعات', 'over five hours refused');
+  const old = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+  if (old.getFullYear() === now.getFullYear()) {
+    _has(refusal('editReport', Object.assign({}, ref, change, { month: `${year}-${pad(old.getMonth() + 1)}` })), 'ثابت',
+      'a frozen month is refused');
+  }
+
+  const edited = call('editReport', Object.assign({}, ref, change), token).data;
+  const after = mine(edited);
+  _eq([after.minutes, after.attendance], [90, 3], 'duration and count written to the sheet');
+  _eq([edited.log[0].action, edited.log[0].name], ['تعديل تقرير', `مختبر ${tag}`], 'edit logged with the admin');
+  _has(edited.log[0].details, '← 1:30', 'log shows the new duration');
+  _has(refusal('editReport', Object.assign({}, ref, change)), 'حدّث التقارير', 'the old stamp no longer matches');
+
+  const deleted = call('deleteReport', { teacher, month: after.month, row: after.row, stamp: after.stamp }, token).data;
+  _ok(!mine(deleted), 'deleted report gone from the sheet');
+  _eq(deleted.log[0].action, 'حذف تقرير', 'delete logged');
+  const tab = _withMode(true, () => {
+    const file = _teacherSheetFiles(year).find(f => f.teacher === teacher);
+    return SpreadsheetApp.openById(file.id).getSheets().find(s => _tabMonth(s.getName(), year) === after.month);
+  });
+  const last = tab.getLastRow();
+  _eq(last < 2 ? [] : tab.getRange(last - 1, 1, 2, 1).getValues().map(r => r[0]),
+    last < 2 ? [] : ['الإجمالي', 'المتوسط'], 'total and average rebuilt after a delete');
+}
+
 function runAllTests() {
   runAllUnitTests();
   const unitPass = _T.pass;
@@ -1481,6 +1549,7 @@ function runAllTests() {
   _suite('Integration: Dashboard',                   integrationTest_Dashboard);
   _suite('Integration: StudentDetails',              integrationTest_StudentDetails);
   _suite('Integration: Api',                         integrationTest_Api);
+  _suite('Integration: ReportEdits',                 integrationTest_ReportEdits);
   _report('INTEGRATION TESTS');
 
   console.log(`\nSUMMARY — Unit: ${unitPass}P/${unitFail}F | Integration: ${_T.pass}P/${_T.fail}F`);

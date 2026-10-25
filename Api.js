@@ -83,7 +83,30 @@ const API_WRITES = {
     run: (a, year, test) => dashboardSaveExpense(a.month, a.amount, year, test),
     details: a => `${a.month}: ${a.amount}`,
   },
+  // A report row of a teacher's sheet (S-59). The notes cell may hold children's
+  // names, so it stays out of the log.
+  editReport: {
+    label: 'تعديل تقرير',
+    run: (a, year, test) => dashboardEditReport(_reportRef(a),
+      { hours: a.hours, minutes: a.minutes, students: a.students }, year, test),
+    details: (a, r) => `${_reportPlace(a, r.before)}: المدة ${r.before[3]} ← ${r.after.duration}، `
+      + `الطلاب ${r.before[4] || '-'} ← ${r.after.students}`,
+  },
+  deleteReport: {
+    label: 'حذف تقرير',
+    run: (a, year, test) => dashboardDeleteReport(_reportRef(a), year, test),
+    details: (a, r) => `${_reportPlace(a, r.before)}: المدة ${r.before[3]}، الطلاب ${r.before[4] || '-'}`,
+  },
 };
+
+function _reportRef(a) {
+  return { teacher: a.teacher, month: a.month, row: a.row, stamp: a.stamp };
+}
+
+/** The teacher, date and session of a report, for its log row. */
+function _reportPlace(a, cells) {
+  return `${a.teacher}، ${cells[0]}، ${cells[1]}`;
+}
 
 /**
  * The (name, value) pairs of a batch write, from args n0, v0, n1, v1, ...
