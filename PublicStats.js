@@ -366,7 +366,7 @@ function refreshPublicStats(year, today) {
     teachers,
     halaqat:  halaqatRows,
     expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
-    rates:    _readBody(registry.getSheetByName(REGISTRY.RATES_TAB)),
+    rates:    readRateRows(),
     legacy:   _readBody(ss.getSheetByName(PUBLIC_STATS.LEGACY_TAB)),
     today:    now,
     frozenMonthly,

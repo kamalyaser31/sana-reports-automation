@@ -816,9 +816,16 @@ function _testDashboard() {
     _eq(d.aliases, [{ teacher: 'محمد نبيل', from: 'حمزه عالء', to: 'حمزة علاء', applied: false }], 'aliases listed');
     _eq(d.expenses.map(e => e.month), ['2026-10', '2026-08'], 'expense rows listed');
     _eq(d.currency, 'EGP', 'one currency');
-    _eq([d.teachers.map(t => t.rate), d.unpriced], [[80, 100], []], 'rates per teacher, none missing');
-    _eq(d.pay.length, 3, 'pay rows sent');
-    const noRate = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, { rates: [['محمد نبيل', 100]] }));
+    _eq([d.pay, d.teachers.map(t => t.rate), d.rateLog], [null, ['', ''], []], 'no rates or pay without the pay password');
+    const open = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true,
+      rateLog: [[new Date(2026, 9, 25, 10, 0), 'منى', 'محمد نبيل: 100']] }, input));
+    _eq([open.teachers.map(t => t.rate), open.unpriced], [[80, 100], []], 'rates per teacher once unlocked, none missing');
+    _eq([open.pay.length, open.rateLog[0].details], [3, 'محمد نبيل: 100'], 'pay rows and rate log sent once unlocked');
+    const oldLog = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, {
+      log: [[new Date(), 'منى', RATE_LOG_ACTION, 'محمد نبيل: 100'], [new Date(), 'منى', 'مصروف', '2026-10: 5']] }));
+    _eq(oldLog.log.map(e => e.action), ['مصروف'], 'old rate rows kept out of the shared log');
+    const noRate = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
+      { rates: [['محمد نبيل', 100]] }));
     _eq([noRate.teachers[0].rate, noRate.unpriced], ['', ['أسماء علي']], 'teacher without a rate named');
     const withDetails = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, {
       teachers: [{ name: 'أسماء علي', code: 'T002', detailCols: { birthYear: 0, phone: 1 },
@@ -874,12 +881,12 @@ function _testApi() {
     const session = apiLogin(' أحمد  علي ', 'secret', 'secret', cache);
     _eq(session.name, 'أحمد علي', 'login returns the cleaned name');
     _ok(session.token.length >= 64, 'long random token');
-    _eq(apiSession(session.token, 'secret', cache), 'أحمد علي', 'session gives the name back');
+    _eq(apiSession(session.token, 'secret', cache).name, 'أحمد علي', 'session gives the name back');
     _eq(throws(() => apiSession(session.token, 'changed', cache)), 'auth', 'a new password ends old sessions');
     _eq(throws(() => apiSession('', 'secret', cache)), 'auth', 'no token refused');
     _eq(throws(() => handleApiRequest({ action: 'data', token: 'nope', year: '2026', args: {} },
       { password: 'secret', cache })), 'auth', 'data needs a session');
-    _eq(apiSession(apiLogin('أحمد', 'secret', ' secret ', cache).token, 'secret ', cache), 'أحمد',
+    _eq(apiSession(apiLogin('أحمد', 'secret', ' secret ', cache).token, 'secret ', cache).name, 'أحمد',
       'spaces around the stored password ignored');
 
     _section('قفل الدخول');
@@ -901,6 +908,31 @@ function _testApi() {
     const nine = _memoryCache();
     for (let i = 0; i < API.MAX_FAILS - 1; i++) throws(() => apiLogin('أحمد', 'wrong', 'secret', nine));
     _eq(throws(() => apiLogin('أحمد', 'secret', 'secret', nine)), '', 'nine wrong tries do not lock');
+
+    _section('كلمة مرور الرواتب (S-47)');
+    const payCache = _memoryCache();
+    const free = { tryLock: () => true, releaseLock() {} };
+    const payDeps = { password: 'secret', payPassword: 'money', cache: payCache, loginLock: free };
+    const tok = apiLogin('منى', 'secret', 'secret', payCache).token;
+    const sess = () => apiSession(tok, 'secret', payCache);
+    _ok(!apiPayOpen(sess(), 'money'), 'pay closed after login');
+    _eq(throws(() => handleApiRequest({ action: 'saveRate', token: tok, year: '2026', args: { teacher: 'x', rate: '5' } },
+      payDeps)), 'error', 'saving a rate needs the pay password, and keeps the session');
+    _eq(throws(() => apiUnlockPay(sess(), tok, 'secret', 'money', payCache)), 'error', 'login password does not open pay');
+    _ok(!!apiSession(tok, 'secret', payCache), 'a wrong pay password keeps the admin logged in');
+    apiUnlockPay(sess(), tok, 'money', 'money ', payCache);
+    _ok(apiPayOpen(sess(), 'money'), 'pay open with its password');
+    _ok(!apiPayOpen(sess(), 'changed'), 'a new pay password closes pay');
+    _ok(sess().payUntil - Date.now() <= API.PAY_SECONDS * 1000, 'pay open for half an hour at most');
+    apiLockPay(sess(), tok, payCache);
+    _ok(!apiPayOpen(sess(), 'money'), 'lock closes pay');
+    _eq(throws(() => apiUnlockPay(sess(), tok, 'x', '', payCache)), 'error', 'no pay password configured → no unlock');
+    const payGuard = _memoryCache();
+    const tok2 = apiLogin('منى', 'secret', 'secret', payGuard).token;
+    for (let i = 0; i < API.MAX_FAILS; i++) throws(() => apiUnlockPay(apiSession(tok2, 'secret', payGuard), tok2, 'bad', 'money', payGuard));
+    _eq(throws(() => apiUnlockPay(apiSession(tok2, 'secret', payGuard), tok2, 'money', 'money', payGuard)), 'error',
+      'pay locked after ten wrong tries');
+    _isNull(payGuard.get(API.LOCK_KEY), 'pay tries do not lock the login');
 
     _section('سجل التعديلات');
     _eq(rowsToEditLog([[new Date(2026, 9, 24, 9, 5), 'أحمد', 'مصروف', '2026-10: 500'], ['', '', '', ''],
@@ -1164,7 +1196,10 @@ function integrationTest_PublicStats() {
     const teachers = registryTeacherSheets(_findRegistry('2026')).map(sh => sh.getName());
     saveTeacherRate(teachers[0], '٧٠');
     teachers.forEach(t => saveTeacherRate(t, 60));
-    const rates = _readBody(_findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB));
+    const rates = readRateRows();
+    _isNull(_findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB) && _readBody(
+      _findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB)).some(r => r[1] === 60) ? 'in registry' : null,
+      'rates not written to the shared registry');
     _eq(rates.filter(r => r[0] === teachers[0]).map(r => r[1]), [60], 'rate updated in place, eastern digits read');
     refused = '';
     try { saveTeacherRate(teachers[0], '0'); } catch (e) { refused = e.message; }
@@ -1229,7 +1264,7 @@ function integrationTest_Dashboard() {
 
     const withExpense = dashboardSaveExpense('2026-08', '120', '2026');
     _ok(withExpense.expenses.some(e => e.month === '2026-08' && e.amount === 120), 'expense saved from the dashboard');
-    const withRate = dashboardSaveRate(teacher, '٥٠', '2026');
+    const withRate = _withPay(true, () => dashboardSaveRate(teacher, '٥٠', '2026'));
     _eq(withRate.teachers.find(t => t.name === teacher).rate, 50, 'rate saved from the dashboard');
     _ok(withRate.pay.filter(p => p.teacher === teacher).every(p => p.rate === 50), 'pay uses the new rate');
 
@@ -1312,7 +1347,8 @@ function integrationTest_Api() {
     'التقرير': _buildTestReport('06-09-2026', 'صباحية', 3, `${tag}6`, _sampleStudentText([{ name: `منير ${tag}` }])),
     'ملاحظات خاصة للإدارة': '',
   });
-  const deps = { password: `pass-${tag}`, cache: _memoryCache(), loginLock: LockService.getDocumentLock() || LockService.getUserLock() };
+  const deps = { password: `pass-${tag}`, payPassword: `pay-${tag}`, cache: _memoryCache(),
+    loginLock: LockService.getDocumentLock() || LockService.getUserLock() };
   const call = (action, args, token) => handleApiRequest(
     { action, token: token || '', test: true, year: '2026', args: args || {} }, deps);
 
@@ -1321,11 +1357,24 @@ function integrationTest_Api() {
   const data = call('data', {}, login.token);
   _ok(data.ok && !_hasDate(data.data) && Array.isArray(data.data.log), 'data has the edit log and no Date');
 
+  _eq([data.data.pay, data.data.payOpen], [null, false], 'no pay before the pay password');
+  let refused = '';
+  try { call('saveRate', { teacher, rate: '65' }, login.token); } catch (e) { refused = e.message; }
+  _has(refused, 'افتح الرواتب', 'rate refused before the pay password');
+
+  const opened = call('unlockPay', { password: deps.payPassword }, login.token);
+  _ok(opened.data.payOpen && Array.isArray(opened.data.pay), 'pay password opens rates and pay');
   const saved = call('saveRate', { teacher, rate: '65' }, login.token);
   _eq(saved.data.teachers.find(t => t.name === teacher).rate, 65, 'rate saved through the API');
-  _eq(saved.data.log[0].name + '|' + saved.data.log[0].action + '|' + saved.data.log[0].details,
-    `مختبر ${tag}|سعر الساعة|${teacher}: 65`, 'write logged with the name typed at login');
-  _eq(call('data', {}, login.token).data.log[0].name, `مختبر ${tag}`, 'log row written to the registry');
+  _eq(saved.data.rateLog[0].name + '|' + saved.data.rateLog[0].details, `مختبر ${tag}|${teacher}: 65`,
+    'rate change logged with the name typed at login');
+  const after = call('data', {}, login.token).data;
+  _eq(after.rateLog[0].name, `مختبر ${tag}`, 'rate log row written to the rates file');
+  _ok(!after.log.some(e => e.action === RATE_LOG_ACTION), 'no rate row in the shared edit log');
+
+  call('setGender', { teacher, key: studentNameKey(`منير ${tag}`), gender: STUDENT_GENDER.MALE, label: `منير ${tag}` }, login.token);
+  _eq(call('data', {}, login.token).data.log[0].name, `مختبر ${tag}`, 'other writes logged in the registry');
+  _eq(call('lockPay', {}, login.token).data.pay, null, 'lock hides pay again');
 
   const reply = JSON.parse(doPost({ postData: { contents: '{' } }).getContent());
   _eq([reply.ok, reply.error], [false, 'طلب غير مفهوم.'], 'doPost answers a bad body with JSON');

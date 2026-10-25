@@ -498,6 +498,7 @@ const REGISTRY = {
   ALIASES_TAB:  'الأسماء البديلة',
   EXPENSES_TAB: 'المصروفات',
   HALAQAT_TAB:  'الحلقات',
+  // Kept only so registries made before S-48 do not list it as a teacher tab.
   RATES_TAB:    'أسعار الساعة',
   LOG_TAB:      'سجل التعديلات',
   DATE_FORMAT:  'dd-mm-yyyy',
@@ -508,7 +509,6 @@ const REGISTRY = {
   ],
   ALIAS_HEADERS:   ['المعلم', 'الاسم كما ورد', 'الاسم الصحيح', 'تاريخ التطبيق'],
   EXPENSE_HEADERS: ['الشهر', 'المبلغ', 'العملة'],
-  RATE_HEADERS:    ['المعلم', 'السعر'],
   LOG_HEADERS:     ['الوقت', 'الاسم', 'الفعل', 'التفاصيل'],
   HALAQA_HEADERS:  ['report_id', 'التاريخ', 'المعلم', 'الفترة', 'رقم الحلقة', 'الفئة',
     'المدة بالدقائق', 'الطلاب المحسوبون'],
@@ -745,30 +745,76 @@ function getOrCreateRegistry(yearFolder, year) {
   const halaqat = ss.insertSheet(REGISTRY.HALAQAT_TAB);
   _styleHeader(halaqat, REGISTRY.HALAQA_HEADERS);
   halaqat.hideSheet();
-  const rates = _getOrCreateRatesTab(ss);
 
-  // Aliases and hourly rates carry into the new year (S-02, S-34).
   const previous = _findRegistry(String(Number(year) - 1));
   if (previous) {
     const carried = _readBody(previous.getSheetByName(REGISTRY.ALIASES_TAB));
     if (carried.length) first.getRange(2, 1, carried.length, REGISTRY.ALIAS_HEADERS.length).setValues(carried);
-    const lastRates = _readBody(previous.getSheetByName(REGISTRY.RATES_TAB));
-    if (lastRates.length) rates.getRange(2, 1, lastRates.length, REGISTRY.RATE_HEADERS.length).setValues(lastRates);
   }
   return ss;
 }
 
+// ============================================================================
+// 6-ب. HOURLY RATES FILE (S-48)
+// ============================================================================
+
 /**
- * «أسعار الساعة», added on first use to a registry made before S-34.
- * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} ss
- * @returns {GoogleAppsScript.Spreadsheet.Sheet}
+ * Rates and their log live outside the shared academy folder, in the owner's
+ * own Drive, so whoever was given the folder cannot open them. One rate per
+ * teacher for every year.
  */
-function _getOrCreateRatesTab(ss) {
-  const existing = ss.getSheetByName(REGISTRY.RATES_TAB);
+const RATES_FILE = {
+  NAME:        'أسعار ساعات معلمي سنا',
+  RATES_TAB:   'أسعار الساعة',
+  LOG_TAB:     'سجل الأسعار',
+  HEADERS:     ['المعلم', 'السعر'],
+  LOG_HEADERS: ['الوقت', 'الاسم', 'التفاصيل'],
+};
+
+/** My Drive of the owner, or the test folder while testing. */
+function _ratesFolder() {
+  return _TEST_MODE ? getRootFolder() : DriveApp.getRootFolder();
+}
+
+/** @returns {GoogleAppsScript.Spreadsheet.Spreadsheet|null} */
+function _findRatesFile() {
+  const file = _firstNotTrashed(_ratesFolder().getFilesByName(RATES_FILE.NAME));
+  return file ? SpreadsheetApp.openById(file.getId()) : null;
+}
+
+/** @returns {GoogleAppsScript.Spreadsheet.Spreadsheet} */
+function _getOrCreateRatesFile() {
+  const existing = _findRatesFile();
   if (existing) return existing;
-  const sheet = ss.insertSheet(REGISTRY.RATES_TAB);
-  _styleHeader(sheet, REGISTRY.RATE_HEADERS);
-  return sheet;
+  const ss = SpreadsheetApp.create(RATES_FILE.NAME);
+  DriveApp.getFileById(ss.getId()).moveTo(_ratesFolder());
+  const first = ss.getSheets()[0];
+  first.setName(RATES_FILE.RATES_TAB);
+  _styleHeader(first, RATES_FILE.HEADERS);
+  _styleHeader(ss.insertSheet(RATES_FILE.LOG_TAB), RATES_FILE.LOG_HEADERS);
+  return ss;
+}
+
+/** «أسعار الساعة» values, or [] before the first rate is saved. */
+function readRateRows() {
+  const ss = _findRatesFile();
+  return ss ? _readBody(ss.getSheetByName(RATES_FILE.RATES_TAB)) : [];
+}
+
+/** «سجل الأسعار» values, or []. */
+function readRateLogRows() {
+  const ss = _findRatesFile();
+  return ss ? _readBody(ss.getSheetByName(RATES_FILE.LOG_TAB)) : [];
+}
+
+/**
+ * @param {string} name - As typed by the admin at login.
+ * @param {string} details
+ */
+function appendRateLog(name, details) {
+  const sheet = _getOrCreateRatesFile().getSheetByName(RATES_FILE.LOG_TAB);
+  sheet.appendRow([new Date(), name, details]);
+  sheet.getRange(sheet.getLastRow(), 1).setNumberFormat('dd-mm-yyyy hh:mm');
 }
 
 /**
@@ -1046,8 +1092,9 @@ function setStudentGender(teacher, key, gender, year) {
 }
 
 /**
- * Saves a teacher's hourly rate in pounds (S-34): updates the teacher's row if
- * it exists, else appends one. The one rate prices every open month.
+ * Saves a teacher's hourly rate in pounds (S-34) in the rates file (S-48):
+ * updates the teacher's row if it exists, else appends one. The one rate prices
+ * every open month.
  * @param {string} teacher - Teacher tab name.
  * @param {number|string} rate
  * @param {string} [year]
@@ -1058,7 +1105,7 @@ function saveTeacherRate(teacher, rate, year) {
   _withScriptLock(() => {
     const ss = _registryOrThrow(year);
     if (!teacher || !ss.getSheetByName(_teacherTabName(teacher))) throw new Error(`لا تبويب للمعلم «${teacher}» في السجل.`);
-    const sheet = _getOrCreateRatesTab(ss);
+    const sheet = _getOrCreateRatesFile().getSheetByName(RATES_FILE.RATES_TAB);
     const index = _readBody(sheet).findIndex(r => String(r[0]).trim() === teacher);
     const row = index === -1 ? sheet.getLastRow() + 1 : index + 2;
     sheet.getRange(row, 1, 1, 2).setValues([[teacher, Math.round(value * 100) / 100]]);

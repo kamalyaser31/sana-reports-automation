@@ -34,6 +34,8 @@ function _dayOrBlank(value) {
  * @param {Array<Array>} input.expenses
  * @param {Array<Array>} [input.rates] - «أسعار الساعة» values.
  * @param {Array<Array>} [input.log]   - «سجل التعديلات» values.
+ * @param {Array<Array>} [input.rateLog] - «سجل الأسعار» values.
+ * @param {boolean} [input.showPay] - Rates and pay leave only for an unlocked session (S-47).
  * @param {Array<Array>} input.aliases - «الأسماء البديلة» values.
  * @param {Array<Array>} input.legacy
  * @param {Date} input.today
@@ -64,11 +66,12 @@ function buildDashboardData(input) {
     monthlyHeaders: PUBLIC_STATS.MONTHLY_HEADERS,
     totals: named(stats.totals),
     monthly: named(stats.monthly),
-    pay: stats.pay,
+    pay: input.showPay ? stats.pay : null,
+    rateLog: input.showPay ? rowsToEditLog((input.rateLog || []).map(r => [r[0], r[1], RATE_LOG_ACTION, r[2]])) : [],
     unpriced: Array.from(new Set(stats.pay.filter(p => p.pay === '').map(p => p.teacher))).sort(),
     teachers: input.teachers.map(t => ({
       name: t.name,
-      rate: rates[t.name] || '',
+      rate: input.showPay ? (rates[t.name] || '') : '',
       students: sortStudentsByLastSeen(t.students).map(s => {
         const cols = t.detailCols || { birthYear: -1, phone: -1 };
         const birthYear = cols.birthYear >= 0 ? (s.extra[cols.birthYear] || '') : '';
@@ -85,7 +88,8 @@ function buildDashboardData(input) {
         };
       }),
     })).sort((a, b) => (a.name > b.name ? 1 : -1)),
-    log: rowsToEditLog(input.log),
+    // Rate rows written before S-48 stay out of the shared log.
+    log: rowsToEditLog((input.log || []).filter(r => r[2] !== RATE_LOG_ACTION)),
     aliases: rowsToAliases(input.aliases).map(a => ({
       teacher: a.teacher, from: a.from, to: a.to, applied: a.applied,
     })),
@@ -136,6 +140,22 @@ function _withMode(test, fn) {
   finally { _TEST_MODE = previous; }
 }
 
+/** Pay data is sent only inside _withPay(true). */
+let _SHOW_PAY = false;
+
+/**
+ * Runs fn with rates and pay shown or hidden (S-47); the API sets it from the session.
+ * @param {boolean} show
+ * @param {Function} fn
+ * @returns {*}
+ */
+function _withPay(show, fn) {
+  const previous = _SHOW_PAY;
+  _SHOW_PAY = show === true;
+  try { return fn(); }
+  finally { _SHOW_PAY = previous; }
+}
+
 /**
  * @param {string} [year]
  * @returns {Object}
@@ -159,7 +179,9 @@ function _getDashboardData(year) {
       halaqat: _readBody(registry.getSheetByName(REGISTRY.HALAQAT_TAB))
         .map(r => [r[0], r[1], _teacherTabName(r[2])].concat(r.slice(3))),
       expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
-      rates: _readBody(registry.getSheetByName(REGISTRY.RATES_TAB)),
+      rates: readRateRows(),
+      rateLog: _SHOW_PAY ? readRateLogRows() : [],
+      showPay: _SHOW_PAY,
       log: _readBody(registry.getSheetByName(REGISTRY.LOG_TAB)),
       aliases: _readBody(registry.getSheetByName(REGISTRY.ALIASES_TAB)),
       legacy: publicFile ? _readBody(publicFile.getSheetByName(PUBLIC_STATS.LEGACY_TAB)) : [],
