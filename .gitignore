@@ -11,3 +11,6 @@ Config.local.js
 # legacy_stats.py output (aggregate numbers, pasted once into the public file)
 legacy_stats.csv
 __pycache__/
+
+# publish.py record of the last deploy
+.last_deploy.json
