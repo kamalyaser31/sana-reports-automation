@@ -154,22 +154,44 @@ function readExpenses(rows) {
 }
 
 /**
- * Minutes taught in one monthly tab of a teacher's sheet (S-50), from its
- * display values below the header: «مدة الحصة» (column D, "h:mm") of every row
- * except the two summary rows and the rows marked «(تقرير مكرر)».
+ * The halaqat of one monthly tab of a teacher's sheet (S-50, S-52), from its
+ * display values below the header: one per row, except the two summary rows
+ * and the rows marked «(تقرير مكرر)». Minutes are «مدة الحصة» (column D,
+ * "h:mm"), attendance «عدد الطلاب» (column E).
  * @param {Array<Array>} rows
- * @returns {number}
+ * @param {string} teacher - Teacher tab name.
+ * @param {string} month - "yyyy-mm" of the tab.
+ * @returns {Array<{teacher: string, date: Date, month: string, category: string, minutes: number, attendance: number}>}
  */
-function teacherSheetMinutes(rows) {
+function teacherSheetHalaqat(rows, teacher, month) {
   const summary = new Set(['الإجمالي', 'المتوسط']);
-  return (rows || []).reduce((total, r) => {
-    if (summary.has(String(r[0]).trim()) || String(r[5] || '').trim().indexOf('(تقرير مكرر)') === 0) return total;
+  const [y, m] = month.split('-').map(Number);
+  const out = [];
+  (rows || []).forEach(r => {
+    if (summary.has(String(r[0]).trim()) || String(r[5] || '').trim().indexOf('(تقرير مكرر)') === 0) return;
     const d = String(r[3] === undefined ? '' : r[3]).trim();
     const hm = /^(\d+):(\d{1,2})/.exec(d);
     // A plain number is a day fraction, as Sheets stores a duration.
     const minutes = hm ? Number(hm[1]) * 60 + Number(hm[2]) : Math.round((Number(d) || 0) * 1440);
-    return total + minutes;
-  }, 0);
+    if (!(minutes > 0)) return;
+    out.push({ teacher, date: new Date(y, m - 1, _sheetDay(r[0])), month,
+      category: String(r[2] || '').trim(), minutes,
+      attendance: Number(normalizeDigitsAndText(String(r[4] || '')).trim()) || 0 });
+  });
+  return out;
+}
+
+/**
+ * Day of the month in a report date: "الاثنين، ١٢ أكتوبر ٢٠٢٦" or "12-10-2026";
+ * 1 when none is found, so the halaqa still counts in its tab's month.
+ * @param {*} text
+ * @returns {number}
+ */
+function _sheetDay(text) {
+  const s = normalizeDigitsAndText(String(text || ''));
+  const m = /(\d{1,2})[-/.]\d{1,2}[-/.]\d{4}/.exec(s) || /(\d{1,2})\s+[^\d\s]+\s+\d{4}/.exec(s);
+  const day = m ? Number(m[1]) : 1;
+  return day >= 1 && day <= 31 ? day : 1;
 }
 
 /**
@@ -191,13 +213,13 @@ function readFixedExpenses(rows) {
  * Each teacher's pay per month (S-35): the month's hours in the teacher's own
  * sheet (S-50) times the current rate, rounded to the pound. rate and pay are
  * '' without a rate.
- * @param {Array<{month: string, teacher: string, minutes: number}>} sheetHours - From readTeacherSheetHours.
+ * @param {Array<{month: string, teacher: string, minutes: number}>} sheetHalaqat - From readTeacherSheetHalaqat.
  * @param {Object<string, number>} rates - From readRates.
  * @returns {Array<{month: string, teacher: string, hours: number, rate: number|string, pay: number|string}>}
  */
-function computeTeacherPay(sheetHours, rates) {
+function computeTeacherPay(sheetHalaqat, rates) {
   const byKey = {};
-  (sheetHours || []).forEach(h => {
+  (sheetHalaqat || []).forEach(h => {
     if (!(h.month >= PUBLIC_STATS.PAY_FROM) || !(h.minutes > 0)) return;
     const k = `${h.month}|${h.teacher}`;
     (byKey[k] = byKey[k] || { month: h.month, teacher: h.teacher, minutes: 0 }).minutes += h.minutes;
@@ -217,7 +239,7 @@ function computeTeacherPay(sheetHours, rates) {
  * @param {Array<Array>} input.halaqat  - «الحلقات» values.
  * @param {Array<Array>} input.expenses - «المصروفات» values (other expenses).
  * @param {Array<Array>} [input.rates]  - «أسعار الساعة» values.
- * @param {Array<Object>} [input.sheetHours] - From readTeacherSheetHours.
+ * @param {Array<Object>} [input.sheetHalaqat] - From readTeacherSheetHalaqat.
  * @param {Array<Array>} [input.fixed]  - «المصروفات الثابتة» values.
  * @param {Array<Array>} input.legacy   - «قبل النظام» values.
  * @param {Date} input.today
@@ -228,9 +250,16 @@ function computeTeacherPay(sheetHours, rates) {
 function computePublicStats(input) {
   const today = input.today;
   const activeFrom = new Date(today.getFullYear(), today.getMonth(), today.getDate() - PUBLIC_STATS.ACTIVE_DAYS);
-  const halaqat = collectHalaqat(input.halaqat);
+  // From PAY_FROM on, halaqat, hours and attendance are the teachers' own
+  // sheets', from the 1st of the month; before it, the registry's (S-52).
+  // Students stay the registry's: the sheets hold counts, not names.
+  const registryHalaqat = collectHalaqat(input.halaqat);
+  const sheetHalaqat = (input.sheetHalaqat || []).filter(h => h.month >= PUBLIC_STATS.PAY_FROM);
+  const halaqat = registryHalaqat.filter(h => h.month < PUBLIC_STATS.PAY_FROM).concat(sheetHalaqat);
+  const studentsFrom = registryHalaqat.length
+    ? registryHalaqat.map(h => h.date).sort((a, b) => a - b)[0] : null;
   const expenses = readExpenses(input.expenses);
-  const pay = computeTeacherPay(input.sheetHours, readRates(input.rates));
+  const pay = computeTeacherPay(sheetHalaqat, readRates(input.rates));
   const teachers = input.teachers.slice().sort((a, b) => (a.code > b.code ? 1 : -1));
   const codeOf = {};
   teachers.forEach(t => { codeOf[t.name] = t.code; });
@@ -273,19 +302,21 @@ function computePublicStats(input) {
     .concat([activeTeachers(halaqat.filter(h => h.date >= activeFrom))]));
   totals.push(_sinceStartRow(halaqat, input.legacy));
 
-  return { totals, monthly: _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, input), pay };
+  return { totals, monthly: _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, studentsFrom, input), pay };
 }
 
 /**
  * «منذ التأسيس» (S-30): halaqat, hours and attendance from «قبل النظام» (its
- * academy rows) plus the registry, with no student count.
+ * academy rows) plus the halaqat above, with no student count. Legacy months
+ * from PAY_FROM on are left out: the sheets cover them from the 1st (S-52).
  * @param {Array<Object>} halaqat
  * @param {Array<Array>} legacyRows
  * @returns {Array}
  */
 function _sinceStartRow(halaqat, legacyRows) {
   const n = _halaqaNumbers(halaqat);
-  const academy = (legacyRows || []).filter(r => String(r[1]).trim() === PUBLIC_STATS.ACADEMY);
+  const academy = (legacyRows || []).filter(r => String(r[1]).trim() === PUBLIC_STATS.ACADEMY
+    && (r[0] instanceof Date ? _monthOf(r[0]) : String(r[0]).trim()) < PUBLIC_STATS.PAY_FROM);
   const sum = i => academy.reduce((a, r) => a + (Number(r[i]) || 0), 0);
   const count = n.count + sum(2);
   const attendance = n.attendance + sum(4);
@@ -299,11 +330,11 @@ function _sinceStartRow(halaqat, legacyRows) {
  * month keeps the rows already written for it (S-20).
  * @returns {Array<Array>}
  */
-function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, input) {
+function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, studentsFrom, input) {
   const months = Array.from(new Set(halaqat.map(h => h.month).concat(pay.map(p => p.month)))).sort();
   const firstDay = halaqat.length ? halaqat.map(h => h.date).sort((a, b) => a - b)[0] : null;
   // The registry counts students from its first day only, so that month has no sponsorship (S-50).
-  const partialMonth = firstDay && firstDay.getDate() > 1 ? _monthOf(firstDay) : '';
+  const partialMonth = studentsFrom && studentsFrom.getDate() > 1 ? _monthOf(studentsFrom) : '';
   const fixedItems = readFixedExpenses(input.fixed);
   const fixedTotal = Object.keys(fixedItems).reduce((a, k) => a + fixedItems[k], 0);
   const frozen = input.frozenMonthly || {};
@@ -416,7 +447,7 @@ function refreshPublicStats(year, today) {
     halaqat:  halaqatRows,
     expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
     rates:    readRateRows(),
-    sheetHours: readTeacherSheetHours(y),
+    sheetHalaqat: readTeacherSheetHalaqat(y),
     fixed:    readFixedRows(),
     legacy:   _readBody(ss.getSheetByName(PUBLIC_STATS.LEGACY_TAB)),
     today:    now,
@@ -438,18 +469,19 @@ function refreshPublicStats(year, today) {
 }
 
 /**
- * Minutes per teacher and month from every «[teacher] - تقارير الحلقات <year>»
- * under the year folder, from PUBLIC_STATS.PAY_FROM on (S-50). Opening each
+ * The halaqat of every «[teacher] - تقارير الحلقات <year>» under the year
+ * folder, from PUBLIC_STATS.PAY_FROM on (S-50, S-52). Opening each
  * sheet is slow, so the live result is cached for SHEET_HOURS_SECONDS; a test
  * run reads afresh, as its reports change from one step to the next.
  * @param {string} year
- * @returns {Array<{month: string, teacher: string, minutes: number}>}
+ * @returns {Array<Object>} As teacherSheetHalaqat.
  */
-function readTeacherSheetHours(year) {
+function readTeacherSheetHalaqat(year) {
   const cache = CacheService.getScriptCache();
-  const key = `sheet_hours_${year}`;
+  const key = `sheet_halaqat_${year}`;
   const hit = _TEST_MODE ? null : cache.get(key);
-  if (hit) return JSON.parse(hit);
+  // JSON turns each Date into text; it is made a Date again.
+  if (hit) return JSON.parse(hit).map(h => Object.assign(h, { date: new Date(h.date) }));
 
   const root = _findRootFolder();
   const yearFolder = root && _firstNotTrashed(root.getFoldersByName(sanitizeFilename(year)));
@@ -470,8 +502,8 @@ function readTeacherSheetHours(year) {
         const m = /^(\d{1,2})\s*-/.exec(sheet.getName());
         const month = m ? `${year}-${m[1].padStart(2, '0')}` : '';
         if (!month || month < PUBLIC_STATS.PAY_FROM || sheet.getLastRow() < 2) return;
-        const minutes = teacherSheetMinutes(sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues());
-        if (minutes > 0) out.push({ month, teacher, minutes });
+        const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues();
+        teacherSheetHalaqat(rows, teacher, month).forEach(h => out.push(h));
       });
     }
   }

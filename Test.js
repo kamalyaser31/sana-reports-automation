@@ -677,10 +677,12 @@ function _sampleStatsInput(today, extra) {
     ],
     expenses: [['2026-10', 500, 'EGP'], ['2026-08', '', 'EGP']],
     rates: [['محمد نبيل', 100], ['أسماء علي', 80]],
-    sheetHours: [
-      { month: '2026-09', teacher: 'محمد نبيل', minutes: 420 },
-      { month: '2026-10', teacher: 'محمد نبيل', minutes: 60 },
-      { month: '2026-10', teacher: 'أسماء علي', minutes: 90 },
+    // The registry's October halaqat again, as the teacher sheets hold them (S-52);
+    // the September one is before PAY_FROM and ignored.
+    sheetHalaqat: [
+      { teacher: 'محمد نبيل', date: new Date(2026, 8, 2), month: '2026-09', category: 'أطفال', minutes: 420, attendance: 9 },
+      { teacher: 'محمد نبيل', date: new Date(2026, 9, 3), month: '2026-10', category: 'أطفال', minutes: 60, attendance: 2 },
+      { teacher: 'أسماء علي', date: new Date(2026, 9, 5), month: '2026-10', category: 'كبار', minutes: 90, attendance: 2 },
     ],
     fixed: [['الهدايا والتكريمات', 200], ['إدارة الأكاديمية', '']],
     legacy: [
@@ -739,13 +741,20 @@ function _testPublicStats() {
     _eq(partial.pay[0].rate + '|' + partial.pay[0].pay, '|', 'no rate → rate and pay blank');
     const odd = computeTeacherPay([{ month: '2026-10', teacher: 'س', minutes: 50 }], { 'س': 37.5 });
     _eq(odd[0].pay, 31, 'pay rounded to the pound (50 min × 37.5)');
-    _eq(teacherSheetMinutes([
-      ['01-10-2026', 'صباحية', 'كبار', '1:30', '3', ''],
+    _eq(teacherSheetHalaqat([
+      ['الاثنين، ١٢ أكتوبر ٢٠٢٦', 'مسائية (حلقة 1)', 'كبار', '1:30', '٣', ''],
       ['02-10-2026', 'صباحية', 'كبار', '0:45', '2', '(تقرير مكرر) أُعيد'],
       ['03-10-2026', 'مسائية', 'أطفال', 0.03125, '1', 'ملاحظة'],
+      ['بلا تاريخ', 'مسائية', 'كبار', '0:30', '', ''],
       ['الإجمالي', '', '', '3:00', '6', ''],
       ['المتوسط', '', '', '1:00', '2', ''],
-    ]), 135, 'sheet minutes: h:mm and day fractions, without summaries or duplicates');
+    ], 'س', '2026-10').map(h => [h.date.getDate(), h.month, h.category, h.minutes, h.attendance]),
+    [[12, '2026-10', 'كبار', 90, 3], [3, '2026-10', 'أطفال', 45, 1], [1, '2026-10', 'كبار', 30, 0]],
+    'sheet halaqat: Arabic and numeric dates, h:mm and day fractions, no summaries or duplicates');
+    const withLegacyOct = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20),
+      { legacy: _sampleStatsInput(new Date()).legacy.concat([['2026-10', 'الأكاديمية', 50, 60, 70, 1, 0, 0, 0, 0, 2]]) }));
+    _eq(withLegacyOct.totals.find(r => r[0] === 'منذ التأسيس')[5], 13,
+      'legacy October rows left out of since start: the sheets cover October');
     _eq(readFixedExpenses([['الهدايا والتكريمات', 200], ['إدارة الأكاديمية', ''], ['x', 5]]),
       { 'الهدايا والتكريمات': 200 }, 'fixed expenses: known items with an amount only');
     _eq(readRates([['محمد نبيل', 100], ['x', ''], ['y', -5], ['', 9], ['z', '٤٠']]), { 'محمد نبيل': 100 },
@@ -848,7 +857,7 @@ function _testDashboard() {
       { rateLog: [[new Date(2026, 9, 25, 9), 'منى', 'إدارة الأكاديمية: 900'], [new Date(2026, 9, 25, 8), 'منى', 'محمد نبيل: 100']] }));
     _eq(fixedLog.rateLog.map(e => e.action), [RATE_LOG_ACTION, FIXED_LOG_ACTION], 'rates log rows named by kind, newest first');
     const withSheet = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
-      { sheetHours: input.sheetHours.concat([{ month: '2026-10', teacher: 'رجاء لطفي', minutes: 60 }]) }));
+      { sheetHalaqat: input.sheetHalaqat.concat([{ teacher: 'رجاء لطفي', date: new Date(2026, 9, 7), month: '2026-10', category: 'كبار', minutes: 60, attendance: 1 }]) }));
     _eq(withSheet.rateTeachers.map(t => t.name), ['أسماء علي', 'رجاء لطفي', 'محمد نبيل'],
       'rate list includes a teacher with sheet hours and no registry tab');
     _eq(d.rateTeachers.map(t => t.rate), ['', ''], 'rate list has no amounts before the pay password');
@@ -1229,9 +1238,9 @@ function integrationTest_PublicStats() {
     _ok(refused !== '', 'malformed month refused');
     // 60 pounds an hour makes each teacher's pay their minutes, to check the sum.
     // Pay follows the teacher sheets (S-50), whose teachers may have no registry tab.
-    const sheetHours = readTeacherSheetHours('2026').filter(h => h.month === '2026-10');
+    const sheetHalaqat = readTeacherSheetHalaqat('2026').filter(h => h.month === '2026-10');
     const teachers = Array.from(new Set(registryTeacherSheets(_findRegistry('2026')).map(sh => sh.getName())
-      .concat(sheetHours.map(h => h.teacher))));
+      .concat(sheetHalaqat.map(h => h.teacher))));
     const oldTab = () => _findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB);
     const registryRatesBefore = oldTab() ? JSON.stringify(_readBody(oldTab())) : '';
     saveTeacherRate(teachers[0], '٧٠');
@@ -1272,9 +1281,11 @@ function integrationTest_PublicStats() {
     const oct = _readBody(ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB))
       .find(r => String(r[0]) === '2026-10' && r[2] === PUBLIC_STATS.ACADEMY);
     const fixedTotal = Object.keys(fixed).reduce((a, k) => a + fixed[k], 0);
-    const pay = computeTeacherPay(sheetHours, readRates(readRateRows())).reduce((a, p) => a + p.pay, 0);
-    _ok(sheetHours.length > 0, 'teacher sheet hours read for October');
+    const pay = computeTeacherPay(sheetHalaqat, readRates(readRateRows())).reduce((a, p) => a + p.pay, 0);
+    _ok(sheetHalaqat.length > 0, 'teacher sheet halaqat read for October');
+    const octHours = _round(sheetHalaqat.reduce((a, h) => a + h.minutes, 0) / 60);
     _eq([oct[14], oct[15]], [450 + fixedTotal + pay, 'EGP'], 'expense = sheet pay + fixed + other, updated in place');
+    _eq(oct[8], octHours, 'October hours in the public file are the sheets\' hours (S-52)');
     const expenses = readExpenseMonths(_readBody(_findRegistry('2026').getSheetByName(REGISTRY.EXPENSES_TAB)));
     _eq(expenses.filter(m => m === '2026-10').length, 1, 'one expense row per month');
   } finally {

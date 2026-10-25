@@ -35,7 +35,7 @@ function _dayOrBlank(value) {
  * @param {Array<Array>} [input.rates] - «أسعار الساعة» values.
  * @param {Array<Array>} [input.log]   - «سجل التعديلات» values.
  * @param {Array<Array>} [input.rateLog] - «سجل الأسعار» values.
- * @param {Array<Object>} [input.sheetHours] - From readTeacherSheetHours.
+ * @param {Array<Object>} [input.sheetHalaqat] - From readTeacherSheetHalaqat.
  * @param {Array<Array>} [input.fixed] - «المصروفات الثابتة» values.
  * @param {boolean} [input.showPay] - Rates and pay leave only for an unlocked session (S-47).
  * @param {Array<Array>} input.aliases - «الأسماء البديلة» values.
@@ -46,7 +46,7 @@ function _dayOrBlank(value) {
 function buildDashboardData(input) {
   const stats = computePublicStats({
     teachers: input.teachers, halaqat: input.halaqat, expenses: input.expenses,
-    rates: input.rates, sheetHours: input.sheetHours, fixed: input.fixed,
+    rates: input.rates, sheetHalaqat: input.sheetHalaqat, fixed: input.fixed,
     legacy: input.legacy, today: input.today,
   });
   const fixed = readFixedExpenses(input.fixed);
@@ -190,7 +190,7 @@ function _getDashboardData(year) {
         .map(r => [r[0], r[1], _teacherTabName(r[2])].concat(r.slice(3))),
       expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
       rates: readRateRows(),
-      sheetHours: readTeacherSheetHours(y),
+      sheetHalaqat: readTeacherSheetHalaqat(y),
       fixed: readFixedRows(),
       rateLog: _SHOW_PAY ? readRateLogRows() : [],
       showPay: _SHOW_PAY,
