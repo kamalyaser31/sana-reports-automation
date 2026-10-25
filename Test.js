@@ -750,6 +750,15 @@ function _testPublicStats() {
     const shown = teacherSheetReports([['الاثنين، ١٢ أكتوبر ٢٠٢٦', 'مسائية (حلقة 1)', 'كبار', '1:30', '٣', 'ملاحظة']], 'س', '2026-10')[0];
     _eq([shown.dateText, shown.session, shown.duration, shown.students, shown.notes],
       ['الاثنين، ١٢ أكتوبر ٢٠٢٦', 'مسائية (حلقة 1)', '1:30', '٣', 'ملاحظة'], 'cells kept as the sheet shows them');
+    const tab = [
+      ['29-08-2026', 'تجويد', 'كبار', '1:00', '8', ''],
+      ['الثلاثاء، ٢٩ أغسطس ٢٠٢٦', 'تجويد', 'كبار', '1:30', '8', 'ملاحظة'],
+      ['29-08-2026', 'تجويد', 'كبار', '1:00', '8', '(تقرير مكرر)'],
+      ['29-08-2026', 'صباحية', 'كبار', '1:00', '8', ''],
+      ['30-08-2026', 'تجويد', 'كبار', '1:00', '8', ''],
+    ];
+    _eq(supersededRows(tab, '29-08-2026', 'تجويد'), [0, 1],
+      'a resubmission replaces its halaqa\'s unmarked rows, whatever the date spelling (S-58)');
     const appended = [];
     const range = { setBackground() { return range; }, setFontWeight() { return range; },
       setNumberFormat() { return range; }, setHorizontalAlignment() { return range; } };
@@ -1085,6 +1094,19 @@ function integrationTest_DuplicateDetection() {
   const second = _runIntegrationSubmission(mockData);
   _ok(second.isDuplicate,         'second identical submission flagged duplicate');
   _ok(second.duplicateIndex >= 1, 'duplicate gets a (n) suffix');
+  _ok(second.replacedEarlier,     'the resubmission replaced the earlier row (S-58)');
+  _TEST_MODE = true;
+  try {
+    const teacherFolder = getRootFolder().getFoldersByName('2026').next().getFoldersByName('محمد نبيل').next();
+    const sheet = SpreadsheetApp.openById(_firstNotTrashed(teacherFolder.getFilesByName('محمد نبيل - تقارير الحلقات 2026')).getId())
+      .getSheetByName('08 - أغسطس');
+    const slot = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues()
+      .filter(r => _slotDateKey(r[0]) === '29-08-2026' && r[1] === 'تجويد');
+    const counted = slot.map((r, i) => (String(r[5]).indexOf(DUPLICATE_MARK) === 0 ? -1 : i)).filter(i => i !== -1);
+    _eq(counted, [slot.length - 1], 'only the last report of the halaqa is counted');
+  } finally {
+    _TEST_MODE = false;
+  }
 }
 
 /** اختبار تكاملي — حلقتان من النوع نفسه في اليوم نفسه برقمين مختلفين: ليستا مكررتين. */

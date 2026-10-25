@@ -212,7 +212,7 @@ function executeSubmissionPipeline(e, executionId, startTime) {
 
   // Sheets failure is non-fatal: the Markdown file is already saved.
   try {
-    recordToTeacherSheet(driveTarget.yearTeacherFolder, validatedData);
+    validatedData.replacedEarlier = recordToTeacherSheet(driveTarget.yearTeacherFolder, validatedData).replaced > 0;
   } catch (sheetError) {
     console.error(`[SHEET WARNING] [ExecutionID: ${executionId}] Could not append to teacher sheet:`, sheetError.message);
     _safeLogToDrive(executionId, startTime, `Google Sheets Warning: ${sheetError.message}`, sheetError.stack);
@@ -863,10 +863,39 @@ function verifySavedFile(file) {
 // 11. GOOGLE SHEETS MANAGEMENT & LOGGING
 // ============================================================================
 
+/** Begins the admin cell of a report that is not counted, as another replaced it. */
+const DUPLICATE_MARK = '(تقرير مكرر)';
+
+/**
+ * A report date as one comparable key: "dd-mm-yyyy" when it can be read, else the text.
+ * @param {*} text
+ * @returns {string}
+ */
+function _slotDateKey(text) {
+  const date = _parseReportDate(String(text || ''));
+  return date ? _formatSubmissionDate(date).dateFormatted : String(text || '').trim();
+}
+
+/**
+ * The rows of a monthly tab that a resubmitted report replaces (S-58): same date
+ * and session label, and not marked already.
+ * @param {Array<Array>} rows - Display values of columns A:F below the header.
+ * @param {string} dateText
+ * @param {string} label - From _sessionLabel.
+ * @returns {number[]} Indexes into rows.
+ */
+function supersededRows(rows, dateText, label) {
+  const key = _slotDateKey(dateText);
+  return rows.map((r, i) => i).filter(i => String(rows[i][1]).trim() === label
+    && _slotDateKey(rows[i][0]) === key
+    && String(rows[i][5] || '').trim().indexOf(DUPLICATE_MARK) !== 0);
+}
+
 /**
  * Records the session into the Teacher's yearly Google Sheet under the monthly tab.
  * @param {GoogleAppsScript.Drive.Folder} yearTeacherFolder
  * @param {Object} data
+ * @returns {{ replaced: number }} Earlier rows this report replaced.
  */
 function recordToTeacherSheet(yearTeacherFolder, data) {
   const spreadsheet = getOrCreateTeacherSpreadsheet(yearTeacherFolder, data.teacherName, data.submissionYear);
@@ -874,10 +903,20 @@ function recordToTeacherSheet(yearTeacherFolder, data) {
 
   removeSummaryRows(sheet);
 
+  // A resubmission is usually a correction, so the last report of a halaqa is the
+  // one counted and paid: the earlier rows are marked instead (S-58). Without an
+  // earlier row to replace, the report marks itself, as before.
+  let replaced = [];
+  if (data.isDuplicate && sheet.getLastRow() >= 2) {
+    const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues();
+    replaced = supersededRows(rows, data.reportDateText || data.submissionDateFormatted, _sessionLabel(data));
+    replaced.forEach(i => sheet.getRange(i + 2, 6).setValue(`${DUPLICATE_MARK} ${rows[i][5]}`.trim()));
+  }
+
   // Duration stored as a day fraction so SUM/AVERAGE work natively in Sheets.
   const durationDayFraction = (data.durationHours / 24) + (data.durationMinutes / 1440);
-  const adminCellValue = data.isDuplicate
-    ? `(تقرير مكرر) ${data.adminNotes || ''}`.trim()
+  const adminCellValue = data.isDuplicate && !replaced.length
+    ? `${DUPLICATE_MARK} ${data.adminNotes || ''}`.trim()
     : (data.adminNotes || '');
 
   sheet.appendRow([
@@ -900,6 +939,7 @@ function recordToTeacherSheet(yearTeacherFolder, data) {
   for (let i = 1; i <= CONFIG.SHEET_HEADERS.length; i++) {
     sheet.autoResizeColumn(i);
   }
+  return { replaced: replaced.length };
 }
 
 /**
