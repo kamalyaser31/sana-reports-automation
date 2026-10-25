@@ -1,6 +1,6 @@
 # حالة المشروع (Project State) — sana-reports-automation
 
-**الإصدار:** `5.16.0` في `master`، والسجل يعمل منذ يوم التثبيت 2026-10-25، والنشر المرقّم على النسخة 11.
+**الإصدار:** `5.17.0` في `master`، والسجل يعمل منذ يوم التثبيت 2026-10-25، والنشر المرقّم على النسخة 11.
 **الملفات الحية:** السجل `1KGvHUvjDMqig1_6m8992o8YvvxQ-fkLjDY4wGr5qZOk`، والملف العام `14x7drGCPR4Iwm1dRYKT_HKAigkeeDTAeNbFNlsNC_UM` (لكل من معه الرابط: عارض)، كلاهما في مجلد 2026 تحت مجلد الأكاديمية.
 **تاريخ التحديث:** `2026-10-24`  
 **المستودع:** `https://github.com/kamalyaser31/sana-reports-automation` (خاص - Private)  

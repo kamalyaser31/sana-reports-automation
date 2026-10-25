@@ -748,6 +748,14 @@ function _testPublicStats() {
     const shown = teacherSheetReports([['الاثنين، ١٢ أكتوبر ٢٠٢٦', 'مسائية (حلقة 1)', 'كبار', '1:30', '٣', 'ملاحظة']], 'س', '2026-10')[0];
     _eq([shown.dateText, shown.session, shown.duration, shown.students, shown.notes],
       ['الاثنين، ١٢ أكتوبر ٢٠٢٦', 'مسائية (حلقة 1)', '1:30', '٣', 'ملاحظة'], 'cells kept as the sheet shows them');
+    const appended = [];
+    const range = { setBackground() { return range; }, setFontWeight() { return range; },
+      setNumberFormat() { return range; }, setHorizontalAlignment() { return range; } };
+    appendSummaryRows({ getLastRow: () => 5, appendRow: r => appended.push(r), getRange: () => range });
+    _eq(appended.map(r => [r[0], r[3], r[4]]), [
+      ['الإجمالي', '=SUMIFS(D2:D5,F2:F5,"<>(تقرير مكرر)*")', '=SUMIFS(E2:E5,F2:F5,"<>(تقرير مكرر)*")'],
+      ['المتوسط', '=IFERROR(AVERAGEIFS(D2:D5,F2:F5,"<>(تقرير مكرر)*"),"")', '=IFERROR(AVERAGEIFS(E2:E5,F2:F5,"<>(تقرير مكرر)*"),"")'],
+    ], 'sheet total and average leave duplicate reports out (S-56)');
     _eq(readFixedExpenses([['الهدايا والتكريمات', 200], ['إدارة الأكاديمية', ''], ['x', 5]]),
       { 'الهدايا والتكريمات': 200 }, 'fixed expenses: known items with an amount only');
     _eq(readRates([['محمد نبيل', 100], ['x', ''], ['y', -5], ['', 9], ['z', '٤٠']]), { 'محمد نبيل': 100 },

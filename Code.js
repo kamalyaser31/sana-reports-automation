@@ -942,8 +942,12 @@ function appendSummaryRows(sheet) {
   const totalRowIndex   = lastDataRow + 1;
   const averageRowIndex = lastDataRow + 2;
 
-  sheet.appendRow(['الإجمالي', '', '', `=SUM(D2:D${lastDataRow})`,     `=SUM(E2:E${lastDataRow})`,     '']);
-  sheet.appendRow(['المتوسط',  '', '', `=AVERAGE(D2:D${lastDataRow})`, `=AVERAGE(E2:E${lastDataRow})`, '']);
+  // Rows whose admin cell begins with «(تقرير مكرر)» stay out, as they do from the pay (S-56).
+  const notDuplicate = `F2:F${lastDataRow},"<>(تقرير مكرر)*"`;
+  const sumOf = col => `=SUMIFS(${col}2:${col}${lastDataRow},${notDuplicate})`;
+  const averageOf = col => `=IFERROR(AVERAGEIFS(${col}2:${col}${lastDataRow},${notDuplicate}),"")`;
+  sheet.appendRow(['الإجمالي', '', '', sumOf('D'),     sumOf('E'),     '']);
+  sheet.appendRow(['المتوسط',  '', '', averageOf('D'), averageOf('E'), '']);
 
   const summaryRange = sheet.getRange(totalRowIndex, 1, 2, CONFIG.SHEET_HEADERS.length);
   summaryRange.setBackground('#f3f4f6');
