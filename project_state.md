@@ -1,6 +1,7 @@
 # حالة المشروع (Project State) — sana-reports-automation
 
 **الإصدار:** `5.21.0` في `master`، والسجل يعمل منذ يوم التثبيت 2026-10-25، والنشر المرقّم على النسخة 11.
+**صفحة المتبرعين (S-61):** الملف العام منشور على الويب (`2PACX-1vQ7aGR14f7fqNl1_dXTGZAGqQaocaBgDGhkiCDFJcBowcK9NTmmOR-3tLx6oKWPnZLMoKBN4Sk7GpsO`، تبويب «الإجمالي» `gid=0` و«شهرياً» `gid=1942124452`)، وتقرؤه `donors.html` في `sana-dashboard`؛ ونسخة «قبل النظام» المحفوظة في ملف خاص `1hQyyy8TCd7W3lWTls4M08F1uQBMYtcNOlA_oBaIkfo8`.
 **الملفات الحية:** السجل `1KGvHUvjDMqig1_6m8992o8YvvxQ-fkLjDY4wGr5qZOk`، والملف العام `14x7drGCPR4Iwm1dRYKT_HKAigkeeDTAeNbFNlsNC_UM` (لكل من معه الرابط: عارض)، كلاهما في مجلد 2026 تحت مجلد الأكاديمية.
 **تاريخ التحديث:** `2026-10-24`  
 **المستودع:** `https://github.com/kamalyaser31/sana-reports-automation` (خاص - Private)  
