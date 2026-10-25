@@ -819,16 +819,35 @@ function readFixedRows() {
 }
 
 /**
- * Saves one fixed monthly expense in the rates file (S-51); it counts in every
- * open month from PUBLIC_STATS.PAY_FROM. A blank amount clears it.
- * @param {string} item - One of PUBLIC_STATS.FIXED_ITEMS.
- * @param {number|string} amount - Pounds.
+ * Writes [key, value] rows into a two-column tab: a key's existing row is
+ * updated, a new key is appended.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Array<Array>} rows
  */
-function saveFixedExpense(item, amount) {
-  if (PUBLIC_STATS.FIXED_ITEMS.indexOf(item) === -1) throw new Error(`لا بند ثابت باسم «${item}».`);
-  const text = normalizeDigitsAndText(String(amount === undefined ? '' : amount)).trim();
-  const value = text === '' ? 0 : Number(text);
-  if (!(value >= 0)) throw new Error('المبلغ رقم لا يقل عن صفر.');
+function _upsertRows(sheet, rows) {
+  const keys = _readBody(sheet).map(r => String(r[0]).trim());
+  rows.forEach(([key, value]) => {
+    let index = keys.indexOf(key);
+    if (index === -1) index = keys.push(key) - 1;
+    sheet.getRange(index + 2, 1, 1, 2).setValues([[key, value]]);
+  });
+}
+
+/**
+ * Saves the fixed monthly expenses in the rates file (S-51), all checked
+ * before any is written; each counts in every open month from
+ * PUBLIC_STATS.PAY_FROM. A blank amount clears it.
+ * @param {Array<{item: string, amount: *}>} list - Items of PUBLIC_STATS.FIXED_ITEMS.
+ */
+function saveFixedExpenses(list) {
+  if (!list.length) throw new Error('لا مبلغ تغيّر ليُحفظ.');
+  const rows = list.map(({ item, amount }) => {
+    if (PUBLIC_STATS.FIXED_ITEMS.indexOf(item) === -1) throw new Error(`لا بند ثابت باسم «${item}».`);
+    const text = normalizeDigitsAndText(String(amount === undefined ? '' : amount)).trim();
+    const value = text === '' ? 0 : Number(text);
+    if (!(value >= 0)) throw new Error(`مبلغ «${item}» رقم لا يقل عن صفر.`);
+    return [item, Math.round(value * 100) / 100];
+  });
   _withScriptLock(() => {
     const ss = _getOrCreateRatesFile();
     let sheet = ss.getSheetByName(RATES_FILE.FIXED_TAB);
@@ -836,10 +855,13 @@ function saveFixedExpense(item, amount) {
       sheet = ss.insertSheet(RATES_FILE.FIXED_TAB);
       _styleHeader(sheet, RATES_FILE.FIXED_HEADERS);
     }
-    const index = _readBody(sheet).findIndex(r => String(r[0]).trim() === item);
-    const row = index === -1 ? sheet.getLastRow() + 1 : index + 2;
-    sheet.getRange(row, 1, 1, 2).setValues([[item, Math.round(value * 100) / 100]]);
+    _upsertRows(sheet, rows);
   });
+}
+
+/** One fixed expense; see saveFixedExpenses. */
+function saveFixedExpense(item, amount) {
+  saveFixedExpenses([{ item, amount }]);
 }
 
 /**
@@ -1127,26 +1149,33 @@ function setStudentGender(teacher, key, gender, year) {
 }
 
 /**
- * Saves a teacher's hourly rate in pounds (S-34) in the rates file (S-48):
- * updates the teacher's row if it exists, else appends one. The one rate prices
- * every open month.
- * @param {string} teacher - Teacher tab name.
- * @param {number|string} rate
+ * Saves teachers' hourly rates in pounds (S-34) in the rates file (S-48), all
+ * checked before any is written: a teacher's row is updated if it exists, else
+ * appended. The one rate prices every open month.
+ * @param {Array<{teacher: string, rate: *}>} list - Teacher tab names.
  * @param {string} [year]
  */
-function saveTeacherRate(teacher, rate, year) {
-  const value = Number(normalizeDigitsAndText(String(rate)).trim());
-  if (!(value > 0)) throw new Error('سعر الساعة رقم أكبر من صفر.');
+function saveTeacherRates(list, year) {
+  if (!list.length) throw new Error('لا سعر تغيّر ليُحفظ.');
+  const rows = list.map(({ teacher, rate }) => {
+    const value = Number(normalizeDigitsAndText(String(rate)).trim());
+    if (!(value > 0)) throw new Error(`سعر ساعة «${teacher}» رقم أكبر من صفر.`);
+    return [teacher, Math.round(value * 100) / 100];
+  });
   _withScriptLock(() => {
     const ss = _registryOrThrow(year);
-    // A teacher from CONFIG may have sheet hours before any registry tab (S-50).
-    const known = Object.keys(CONFIG.TEACHERS).some(k => _teacherTabName(CONFIG.TEACHERS[k].name) === teacher);
-    if (!teacher || !(known || ss.getSheetByName(_teacherTabName(teacher)))) throw new Error(`لا معلم باسم «${teacher}».`);
-    const sheet = _getOrCreateRatesFile().getSheetByName(RATES_FILE.RATES_TAB);
-    const index = _readBody(sheet).findIndex(r => String(r[0]).trim() === teacher);
-    const row = index === -1 ? sheet.getLastRow() + 1 : index + 2;
-    sheet.getRange(row, 1, 1, 2).setValues([[teacher, Math.round(value * 100) / 100]]);
+    rows.forEach(([teacher]) => {
+      // A teacher from CONFIG may have sheet hours before any registry tab (S-50).
+      const known = Object.keys(CONFIG.TEACHERS).some(k => _teacherTabName(CONFIG.TEACHERS[k].name) === teacher);
+      if (!teacher || !(known || ss.getSheetByName(_teacherTabName(teacher)))) throw new Error(`لا معلم باسم «${teacher}».`);
+    });
+    _upsertRows(_getOrCreateRatesFile().getSheetByName(RATES_FILE.RATES_TAB), rows);
   });
+}
+
+/** One teacher's rate; see saveTeacherRates. */
+function saveTeacherRate(teacher, rate, year) {
+  saveTeacherRates([{ teacher, rate }], year);
 }
 
 /**

@@ -294,17 +294,16 @@ function dashboardSaveExpense(month, amount, year, test) {
 }
 
 /**
- * Saves a teacher's hourly rate (S-34).
- * @param {string} teacher
- * @param {number|string} rate - Pounds per hour.
+ * Saves the hourly rates typed on the page, in one go (S-34).
+ * @param {Array<{teacher: string, rate: *}>} list - Pounds per hour.
  * @param {string} year
  * @param {boolean} [test]
  * @returns {Object} Fresh dashboard data.
  */
-function dashboardSaveRate(teacher, rate, year, test) {
+function dashboardSaveRates(list, year, test) {
   return _withMode(test, () => {
     try {
-      saveTeacherRate(teacher, rate, year);
+      saveTeacherRates(list, year);
       return _getDashboardData(year);
     } catch (error) {
       throw _friendlyError(error);
@@ -313,17 +312,16 @@ function dashboardSaveRate(teacher, rate, year, test) {
 }
 
 /**
- * Saves one fixed monthly expense (S-51).
- * @param {string} item
- * @param {number|string} amount - Pounds; blank clears it.
+ * Saves the fixed monthly expenses typed on the page, in one go (S-51).
+ * @param {Array<{item: string, amount: *}>} list - Pounds; blank clears one.
  * @param {string} year
  * @param {boolean} [test]
  * @returns {Object} Fresh dashboard data.
  */
-function dashboardSaveFixedExpense(item, amount, year, test) {
+function dashboardSaveFixedExpenses(list, year, test) {
   return _withMode(test, () => {
     try {
-      saveFixedExpense(item, amount);
+      saveFixedExpenses(list);
       return _getDashboardData(year);
     } catch (error) {
       throw _friendlyError(error);

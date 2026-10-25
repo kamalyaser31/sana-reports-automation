@@ -25,6 +25,7 @@ const API = {
   SESSION_PREFIX:  'api_session_',
   PAY_PASSWORD_KEY: 'PAY_PASSWORD',
   PAY_SECONDS:      30 * 60,
+  MAX_PAIRS:        50,
   PAY_FAILS_KEY:    'api_pay_fails',
   PAY_LOCK_KEY:     'api_pay_locked',
 };
@@ -61,20 +62,21 @@ const API_WRITES = {
     run: (a, year, test) => dashboardSetDetails(a.teacher, a.key, { birthYear: a.birthYear, phone: a.phone }, year, test),
     details: a => `${a.label || a.key} عند ${a.teacher}: ${a.birthYear || '-'}، ${a.phone || '-'}`,
   },
-  saveRate: {
+  // One button saves every rate typed: args n0, v0, n1, v1, ... (name, value).
+  saveRates: {
     label: RATE_LOG_ACTION,
     pay: true,
     // Logged in the rates file, never in the shared registry (S-48).
     log: 'rates',
-    run: (a, year, test) => dashboardSaveRate(a.teacher, a.rate, year, test),
-    details: a => `${a.teacher}: ${a.rate}`,
+    run: (a, year, test) => dashboardSaveRates(_argPairs(a).map(p => ({ teacher: p.name, rate: p.value })), year, test),
+    details: a => _argPairs(a).map(p => `${p.name}: ${p.value}`).join('، '),
   },
   saveFixed: {
     label: FIXED_LOG_ACTION,
     pay: true,
     log: 'rates',
-    run: (a, year, test) => dashboardSaveFixedExpense(a.item, a.amount, year, test),
-    details: a => `${a.item}: ${a.amount || 0}`,
+    run: (a, year, test) => dashboardSaveFixedExpenses(_argPairs(a).map(p => ({ item: p.name, amount: p.value })), year, test),
+    details: a => _argPairs(a).map(p => `${p.name}: ${p.value || 0}`).join('، '),
   },
   saveExpense: {
     label: 'مصروف',
@@ -82,6 +84,19 @@ const API_WRITES = {
     details: a => `${a.month}: ${a.amount}`,
   },
 };
+
+/**
+ * The (name, value) pairs of a batch write, from args n0, v0, n1, v1, ...
+ * @param {Object} args
+ * @returns {Array<{name: string, value: string}>}
+ */
+function _argPairs(args) {
+  const out = [];
+  for (let i = 0; args[`n${i}`] !== undefined && i < API.MAX_PAIRS; i++) {
+    out.push({ name: args[`n${i}`], value: args[`v${i}`] === undefined ? '' : args[`v${i}`] });
+  }
+  return out;
+}
 
 // ============================================================================
 // 1. ENTRY POINT

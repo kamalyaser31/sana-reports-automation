@@ -898,10 +898,12 @@ function _testApi() {
     _eq(throws(() => parseApiRequest('{"action":"_getSecret"}')), 'error', 'unknown action refused');
     _eq(throws(() => parseApiRequest('{"action":"constructor"}')), 'error', 'built-in object names refused');
     _eq(throws(() => parseApiRequest('{"action":"data","year":"26"}')), 'error', 'bad year refused');
-    const req = parseApiRequest(JSON.stringify({ action: 'saveRate', token: 't', test: true, year: '2026',
+    const req = parseApiRequest(JSON.stringify({ action: 'saveRates', token: 't', test: true, year: '2026',
       args: { teacher: ' سمية ', rate: 50, extra: { a: 1 } } }));
-    _eq(req, { action: 'saveRate', token: 't', test: true, year: '2026', args: { teacher: 'سمية', rate: '50' } },
+    _eq(req, { action: 'saveRates', token: 't', test: true, year: '2026', args: { teacher: 'سمية', rate: '50' } },
       'args trimmed, control characters and objects dropped');
+    _eq(_argPairs({ n0: 'أ', v0: '5', n1: 'ب', n3: 'د' }), [{ name: 'أ', value: '5' }, { name: 'ب', value: '' }],
+      'batch pairs read in order, up to the first gap');
     _eq(parseApiRequest('{"action":"data","test":"true"}').test, false, 'test mode only for a real true');
 
     _section('كلمة المرور والجلسة');
@@ -947,10 +949,10 @@ function _testApi() {
     const tok = apiLogin('منى', 'secret', 'secret', payCache).token;
     const sess = () => apiSession(tok, 'secret', payCache);
     _ok(!apiPayOpen(sess(), 'money'), 'pay closed after login');
-    _eq(throws(() => handleApiRequest({ action: 'saveRate', token: tok, year: '2026', args: { teacher: 'x', rate: '5' } },
+    _eq(throws(() => handleApiRequest({ action: 'saveRates', token: tok, year: '2026', args: { n0: 'x', v0: '5' } },
       payDeps)), 'error', 'saving a rate needs the pay password, and keeps the session');
     _eq(throws(() => handleApiRequest({ action: 'saveFixed', token: tok, year: '2026',
-      args: { item: 'إدارة الأكاديمية', amount: '5' } }, payDeps)), 'error', 'a fixed expense needs the pay password too');
+      args: { n0: 'إدارة الأكاديمية', v0: '5' } }, payDeps)), 'error', 'a fixed expense needs the pay password too');
     _eq(throws(() => apiUnlockPay(sess(), tok, 'secret', 'money', payCache)), 'error', 'login password does not open pay');
     _ok(!!apiSession(tok, 'secret', payCache), 'a wrong pay password keeps the admin logged in');
     apiUnlockPay(sess(), tok, 'money', 'money ', payCache);
@@ -1241,8 +1243,11 @@ function integrationTest_PublicStats() {
     refused = '';
     try { saveTeacherRate(teachers[0], '0'); } catch (e) { refused = e.message; }
     _ok(refused !== '', 'zero rate refused');
-    saveFixedExpense('الهدايا والتكريمات', '١٠٠');
-    saveFixedExpense('إدارة الأكاديمية', '');
+    refused = '';
+    try { saveTeacherRates([{ teacher: teachers[0], rate: 55 }, { teacher: teachers[0], rate: '' }]); } catch (e) { refused = e.message; }
+    _ok(refused !== '' && readRates(readRateRows())[teachers[0]] === 60,
+      'one bad rate in a batch saves none');
+    saveFixedExpenses([{ item: 'الهدايا والتكريمات', amount: '١٠٠' }, { item: 'إدارة الأكاديمية', amount: '' }]);
     refused = '';
     try { saveFixedExpense('إيجار', 10); } catch (e) { refused = e.message; }
     _ok(refused !== '', 'unknown fixed item refused');
@@ -1311,7 +1316,7 @@ function integrationTest_Dashboard() {
 
     const withExpense = dashboardSaveExpense('2026-08', '120', '2026');
     _ok(withExpense.expenses.some(e => e.month === '2026-08' && e.amount === 120), 'expense saved from the dashboard');
-    const withRate = _withPay(true, () => dashboardSaveRate(teacher, '٥٠', '2026'));
+    const withRate = _withPay(true, () => dashboardSaveRates([{ teacher, rate: '٥٠' }], '2026'));
     _eq(withRate.teachers.find(t => t.name === teacher).rate, 50, 'rate saved from the dashboard');
     _ok(withRate.pay.filter(p => p.teacher === teacher).every(p => p.rate === 50), 'pay uses the new rate');
 
@@ -1406,12 +1411,12 @@ function integrationTest_Api() {
 
   _eq([data.data.pay, data.data.payOpen], [null, false], 'no pay before the pay password');
   let refused = '';
-  try { call('saveRate', { teacher, rate: '65' }, login.token); } catch (e) { refused = e.message; }
+  try { call('saveRates', { n0: teacher, v0: '65' }, login.token); } catch (e) { refused = e.message; }
   _has(refused, 'افتح الرواتب', 'rate refused before the pay password');
 
   const opened = call('unlockPay', { password: deps.payPassword }, login.token);
   _ok(opened.data.payOpen && Array.isArray(opened.data.pay), 'pay password opens rates and pay');
-  const saved = call('saveRate', { teacher, rate: '65' }, login.token);
+  const saved = call('saveRates', { n0: teacher, v0: '65' }, login.token);
   _eq(saved.data.teachers.find(t => t.name === teacher).rate, 65, 'rate saved through the API');
   _eq(saved.data.rateLog[0].name + '|' + saved.data.rateLog[0].details, `مختبر ${tag}|${teacher}: 65`,
     'rate change logged with the name typed at login');
