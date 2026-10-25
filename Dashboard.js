@@ -4,8 +4,9 @@
  * ============================================================================
  * The page is served from GitHub Pages and reaches these functions only through
  * doPost in Api.js, after the password check. They run as the script owner.
- * It shows everything and writes five things only: aliases (S-12), expenses
- * (S-25), gender (S-11), birth year with phone (S-32), and hourly rates (S-34).
+ * It shows everything and writes: aliases (S-12), expenses
+ * (S-25), gender (S-11), birth year with phone (S-32), hourly rates (S-34),
+ * report rows (S-59) and honors (S-60).
  * Teachers' pay is shown here and nowhere else (S-35). Dates leave as
  * "yyyy-mm-dd" strings, because the page reads JSON.
  * ============================================================================
@@ -36,6 +37,8 @@ function _dayOrBlank(value) {
  * @param {Array<Array>} [input.rateLog] - «سجل الأسعار» values.
  * @param {Array<Object>} [input.sheetReports] - From readTeacherSheetReports.
  * @param {Array<Array>} [input.fixed] - «المصروفات الثابتة» values.
+ * @param {Array<Array>} [input.honors] - «التكريمات» values (S-60).
+ * @param {Array<Array>} [input.honorAmounts] - «مبلغ التكريم» values; shown with the pay only.
  * @param {boolean} [input.showPay] - Rates and pay leave only for an unlocked session (S-47).
  * @param {Array<Array>} input.aliases - «الأسماء البديلة» values.
  * @param {Date} input.today
@@ -45,8 +48,12 @@ function buildDashboardData(input) {
   const stats = computePublicStats({
     teachers: input.teachers, expenses: input.expenses,
     rates: input.rates, sheetReports: input.sheetReports, fixed: input.fixed,
+    honors: input.honors, honorAmounts: input.honorAmounts,
     today: input.today,
   });
+  const honors = readHonors(input.honors);
+  const honorCount = {};
+  honors.forEach(h => { honorCount[`${h.teacher}|${h.key}`] = (honorCount[`${h.teacher}|${h.key}`] || 0) + 1; });
   const fixed = readFixedExpenses(input.fixed);
   const rates = readRates(input.rates);
   const nameOf = {};
@@ -72,6 +79,12 @@ function buildDashboardData(input) {
     rateLog: input.showPay ? rowsToEditLog(input.rateLog) : [],
     unpriced: Array.from(new Set(stats.pay.filter(p => p.pay === '').map(p => p.teacher))).sort(),
     fixed: input.showPay ? PUBLIC_STATS.FIXED_ITEMS.map(item => ({ item, amount: fixed[item] || '' })) : null,
+    honorAmount: input.showPay ? honorAmountFor(_monthOf(input.today), readHonorAmounts(input.honorAmounts)) : '',
+    // Newest first; the page counts and ranks from these (S-60).
+    honors: honors.slice().sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.row - a.row)).map(h => ({
+      date: h.date, month: h.month, teacher: h.teacher, name: h.name, reason: h.reason, key: h.key, row: h.row,
+      editable: !isMonthFrozen(h.month, input.today),
+    })),
     teachers: input.teachers.map(t => ({
       name: t.name,
       rate: input.showPay ? (rates[t.name] || '') : '',
@@ -87,6 +100,7 @@ function buildDashboardData(input) {
           birthYear: birthYear === '' ? '' : Number(birthYear),
           age: ageFromBirthYear(birthYear, input.today),
           phone: cols.phone >= 0 ? String(s.extra[cols.phone] || '') : '',
+          honors: honorCount[`${t.name}|${s.key}`] || 0,
           isNew: firstSeen >= newFrom,
         };
       }),
@@ -187,6 +201,8 @@ function _getDashboardData(year, fresh) {
       rates: readRateRows(),
       sheetReports,
       fixed: readFixedRows(),
+      honors: readHonorRows(registry),
+      honorAmounts: readHonorAmountRows(),
       rateLog: _SHOW_PAY ? readRateLogRows() : [],
       showPay: _SHOW_PAY,
       log: _readBody(registry.getSheetByName(REGISTRY.LOG_TAB)),
@@ -291,6 +307,43 @@ function dashboardDeleteReport(ref, year, test) {
     try {
       const result = deleteTeacherReport(ref, year);
       return Object.assign(result, { data: _getDashboardData(year) });
+    } catch (error) {
+      throw _friendlyError(error);
+    }
+  });
+}
+
+/**
+ * Adds or removes an honor, or sets its amount (S-60).
+ * @returns {Object} { honor?, saved?, data }
+ */
+function dashboardAddHonor(honor, year, test) {
+  return _withMode(test, () => {
+    try {
+      const result = addHonor(honor, year, new Date());
+      return Object.assign(result, { data: _getDashboardData(year) });
+    } catch (error) {
+      throw _friendlyError(error);
+    }
+  });
+}
+
+function dashboardDeleteHonor(ref, year, test) {
+  return _withMode(test, () => {
+    try {
+      const honor = deleteHonor(ref, year, new Date());
+      return { honor, data: _getDashboardData(year) };
+    } catch (error) {
+      throw _friendlyError(error);
+    }
+  });
+}
+
+function dashboardSaveHonorAmount(amount, year, test) {
+  return _withMode(test, () => {
+    try {
+      const saved = saveHonorAmount(amount, new Date());
+      return { saved, data: _getDashboardData(year) };
     } catch (error) {
       throw _friendlyError(error);
     }

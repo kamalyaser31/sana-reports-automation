@@ -83,6 +83,24 @@ const API_WRITES = {
     run: (a, year, test) => dashboardSaveExpense(a.month, a.amount, year, test),
     details: a => `${a.month}: ${a.amount}`,
   },
+  // Honors (S-60): entered without the pay password; their amount behind it.
+  addHonor: {
+    label: 'تكريم',
+    run: (a, year, test) => dashboardAddHonor({ teacher: a.teacher, key: a.key, date: a.date, reason: a.reason }, year, test),
+    details: (a, r) => `${r.name} عند ${a.teacher} في ${a.date}${a.reason ? `: ${a.reason}` : ''}`,
+  },
+  deleteHonor: {
+    label: 'حذف تكريم',
+    run: (a, year, test) => dashboardDeleteHonor({ row: a.row, date: a.date, teacher: a.teacher, key: a.key }, year, test),
+    details: (a, r) => `${r.honor.name} عند ${a.teacher} في ${a.date}`,
+  },
+  saveHonorAmount: {
+    label: 'مبلغ التكريم',
+    pay: true,
+    log: 'rates',
+    run: (a, year, test) => dashboardSaveHonorAmount(a.amount, year, test),
+    details: (a, r) => `${r.saved.amount} من ${r.saved.from}`,
+  },
   // A report row of a teacher's sheet (S-59). The notes cell may hold children's
   // names, so it stays out of the log.
   editReport: {

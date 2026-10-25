@@ -672,9 +672,20 @@ function _sampleStatsInput(today, extra) {
       { teacher: 'محمد نبيل', date: new Date(2026, 9, 3), month: '2026-10', category: 'أطفال', minutes: 60, attendance: 2 },
       { teacher: 'أسماء علي', date: new Date(2026, 9, 5), month: '2026-10', category: 'كبار', minutes: 90, attendance: 2 },
     ],
-    fixed: [['الهدايا والتكريمات', 200], ['إدارة الأكاديمية', '']],
+    fixed: [['إدارة الأكاديمية', 200]],
     today,
   }, extra || {});
+}
+
+/** تكريمات: اثنان لحمزة عند محمد نبيل في أكتوبر، وواحد في سبتمبر، وواحد عند أسماء، وصف تالف. */
+function _sampleHonorRows() {
+  return [
+    ['2026-10-03', 'محمد نبيل', 'حمزة علاء', 'حفظ جزء', studentNameKey('حمزة علاء')],
+    ['2026-10-04', 'محمد نبيل', 'حمزة علاء', '', studentNameKey('حمزة علاء')],
+    ['2026-10-05', 'أسماء علي', 'محمد', '', studentNameKey('محمد')],
+    ['تالف', 'x', 'y', '', 'k'],
+    [new Date(2026, 8, 28), 'محمد نبيل', 'محمد', '', studentNameKey('محمد')],
+  ];
 }
 
 function _testPublicStats() {
@@ -684,7 +695,7 @@ function _testPublicStats() {
 
     _section('الإجمالي');
     _eq(out.totals.map(r => r[0]), ['T001', 'T002', 'الأكاديمية'], 'rows ordered by code, then the academy');
-    _eq(byCode('T001').slice(1), [2, 2, 2, 0, 2, 2, 3, 1.5, 2, 2, 0, 0, ''], 'teacher totals');
+    _eq(byCode('T001').slice(1), [2, 2, 2, 0, 2, 2, 3, 1.5, 2, 2, 0, 0, '', 0], 'teacher totals');
     _eq(byCode('T002').slice(5, 9), [1, 1.5, 2, 2], 'second teacher halaqat, hours, attendance, average');
     _eq(byCode('الأكاديمية')[1], 3, 'two-word name once across teachers, single name per teacher');
     _eq(byCode('الأكاديمية').slice(5, 9), [3, 3.5, 5, 1.7], 'academy halaqat');
@@ -700,9 +711,9 @@ function _testPublicStats() {
     _eq(month('2026-10', 'T001').slice(3, 7), [1, 2, 1, 1], 'new, attended, continuing, ratio');
     const ac = month('2026-10', 'الأكاديمية');
     _eq(ac.slice(3, 14), [2, 3, 1, 1, 2, 2.5, 4, 2, 1, 1, 2], 'academy month');
-    _eq(ac.slice(14), [920, 'EGP', 368, 306.67],
+    _eq(ac.slice(14, 18), [920, 'EGP', 368, 306.67],
       'expense = pay 220 + fixed 200 + other 500; ÷ 2.5 sheet hours; sponsorship over 3 students');
-    _eq(month('2026-09', 'الأكاديمية').slice(14), ['', '', '', ''], 'no expense before October 2026 (S-50)');
+    _eq(month('2026-09', 'الأكاديمية').slice(14, 18), ['', '', '', ''], 'no expense before October 2026 (S-50)');
     const base = _sampleStatsInput(new Date(2026, 9, 20));
     const listed = computePublicStats(Object.assign(base, { sheetReports: base.sheetReports.concat([
       { teacher: 'رجاء لطفي', date: new Date(2026, 8, 9), month: '2026-09', category: 'كبار', minutes: 480, attendance: 4 },
@@ -718,15 +729,33 @@ function _testPublicStats() {
       sheetReports: sample.sheetReports.slice(1),
       teachers: [{ name: 'محمد نبيل', code: 'T001', students: [{ key: 'a', name: 'حمزة علاء',
         gender: STUDENT_GENDER.MALE, slots: { '2026-10-25|صباحية|1': ['أطفال', 0, 0] } }] }] }));
-    _eq(lateStart.monthly.find(r => r[2] === PUBLIC_STATS.ACADEMY).slice(14), [920, 'EGP', 368, ''],
+    _eq(lateStart.monthly.find(r => r[2] === PUBLIC_STATS.ACADEMY).slice(14, 18), [920, 'EGP', 368, ''],
       'the first month of the registry, begun after the 1st, has no sponsorship');
-    _eq(month('2026-10', 'T001').slice(14), ['', '', '', ''], 'no expense or pay on teacher rows');
+    _eq(month('2026-10', 'T001').slice(14, 18), ['', '', '', ''], 'no expense or pay on teacher rows');
     const partial = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { rates: [['محمد نبيل', 100]] }));
     const academy = m => partial.monthly.find(r => r[0] === m && r[2] === PUBLIC_STATS.ACADEMY);
-    _eq(academy('2026-10').slice(14), ['', '', '', ''], 'a teacher with halaqat and no rate blanks the expense');
+    _eq(academy('2026-10').slice(14, 18), ['', '', '', ''], 'a teacher with halaqat and no rate blanks the expense');
     const allPriced = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { fixed: [] }));
     _eq(allPriced.monthly.find(r => r[0] === '2026-10' && r[2] === PUBLIC_STATS.ACADEMY)[14], 720,
       'no fixed expenses → pay and other expenses only');
+
+    _section('التكريمات');
+    _eq(readHonors(_sampleHonorRows()).map(h => [h.date, h.row]),
+      [['2026-10-03', 2], ['2026-10-04', 3], ['2026-10-05', 4], ['2026-09-28', 6]],
+      'honors read with their rows; a date cell becomes text, a bad row is left out');
+    const amounts = readHonorAmounts([['2026-11', 80], [new Date(2026, 9, 1), 50]]);
+    _eq(['2026-09', '2026-10', '2026-12'].map(m => honorAmountFor(m, amounts)).concat([honorAmountFor('2026-10', [])]),
+      [50, 50, 80, ''], 'an amount holds from its month; earlier months take the first; none before any');
+    const honored = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20),
+      { honors: _sampleHonorRows(), honorAmounts: [['2026-10', 50]] }));
+    const hm = (m, code) => honored.monthly.find(r => r[0] === m && r[2] === code);
+    _eq([hm('2026-10', 'الأكاديمية')[14], hm('2026-10', 'الأكاديمية')[18], hm('2026-10', 'T001')[18],
+      hm('2026-09', 'الأكاديمية')[18]], [1070, 3, 2, 1],
+      'honors: 3 × 50 added to the expense, counted per month and per teacher (S-60)');
+    _eq(['T001', 'الأكاديمية'].map(c => honored.totals.find(r => r[0] === c)[14]), [3, 4], 'honors in the totals');
+    const unpricedHonors = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { honors: _sampleHonorRows() }));
+    _eq(unpricedHonors.monthly.find(r => r[0] === '2026-10' && r[2] === PUBLIC_STATS.ACADEMY)[14], '',
+      'honors without an amount blank the expense');
 
     _section('المستحقات');
     _eq(out.pay, [
@@ -779,8 +808,8 @@ function _testPublicStats() {
       ['الإجمالي', '=SUMIFS(D2:D5,F2:F5,"<>(تقرير مكرر)*")', '=SUMIFS(E2:E5,F2:F5,"<>(تقرير مكرر)*")'],
       ['المتوسط', '=IFERROR(AVERAGEIFS(D2:D5,F2:F5,"<>(تقرير مكرر)*"),"")', '=IFERROR(AVERAGEIFS(E2:E5,F2:F5,"<>(تقرير مكرر)*"),"")'],
     ], 'sheet total and average leave duplicate reports out (S-56)');
-    _eq(readFixedExpenses([['الهدايا والتكريمات', 200], ['إدارة الأكاديمية', ''], ['x', 5]]),
-      { 'الهدايا والتكريمات': 200 }, 'fixed expenses: known items with an amount only');
+    _eq(readFixedExpenses([['الهدايا والتكريمات', 200], ['إدارة الأكاديمية', 300], ['x', 5]]),
+      { 'إدارة الأكاديمية': 300 }, 'fixed expenses: known items only; the old gifts item no longer counts (S-60)');
     _eq(readRates([['محمد نبيل', 100], ['x', ''], ['y', -5], ['', 9], ['z', '٤٠']]), { 'محمد نبيل': 100 },
       'blank, non-positive and nameless rates read as no rate');
 
@@ -875,8 +904,15 @@ function _testDashboard() {
       rateLog: [[new Date(2026, 9, 25, 10, 0), 'منى', RATE_LOG_ACTION, 'محمد نبيل: 100']] }, input));
     _eq([open.teachers.map(t => t.rate), open.unpriced], [[80, 100], []], 'rates per teacher once unlocked, none missing');
     _eq([open.pay.length, open.rateLog[0].details], [2, 'محمد نبيل: 100'], 'pay rows and rate log sent once unlocked');
-    _eq([d.fixed, open.fixed], [null, [{ item: 'الهدايا والتكريمات', amount: 200 }, { item: 'إدارة الأكاديمية', amount: '' }]],
+    _eq([d.fixed, open.fixed], [null, [{ item: 'إدارة الأكاديمية', amount: 200 }]],
       'fixed expenses only once unlocked');
+    const hd = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
+      { honors: _sampleHonorRows(), honorAmounts: [['2026-10', 50]] }));
+    _eq(hd.teachers[1].students.map(s => [s.name, s.honors]), [['حمزة علاء', 2], ['محمد', 1]], 'honors per student');
+    _eq(hd.honors.map(h => [h.date, h.editable]),
+      [['2026-10-05', true], ['2026-10-04', true], ['2026-10-03', true], ['2026-09-28', false]],
+      'honors newest first; one in a frozen month cannot be removed');
+    _eq([hd.honorAmount, d.honorAmount], [50, ''], 'honor amount once unlocked only');
     const fixedLog = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
       { rateLog: [[new Date(2026, 9, 25, 9), 'منى', FIXED_LOG_ACTION, 'إدارة الأكاديمية: 900'], [new Date(2026, 9, 25, 8), 'منى', RATE_LOG_ACTION, 'محمد نبيل: 100']] }));
     _eq(fixedLog.rateLog.map(e => e.action), [RATE_LOG_ACTION, FIXED_LOG_ACTION], 'rates log rows named by kind, newest first');
@@ -1291,12 +1327,12 @@ function integrationTest_PublicStats() {
     try { saveTeacherRates([{ teacher: teachers[0], rate: 55 }, { teacher: teachers[0], rate: '' }]); } catch (e) { refused = e.message; }
     _ok(refused !== '' && readRates(readRateRows())[teachers[0]] === 60,
       'one bad rate in a batch saves none');
-    saveFixedExpenses([{ item: 'الهدايا والتكريمات', amount: '١٠٠' }, { item: 'إدارة الأكاديمية', amount: '' }]);
+    saveFixedExpenses([{ item: 'إدارة الأكاديمية', amount: '١٠٠' }]);
     refused = '';
     try { saveFixedExpenses([{ item: 'إيجار', amount: 10 }]); } catch (e) { refused = e.message; }
     _ok(refused !== '', 'unknown fixed item refused');
     const fixed = readFixedExpenses(readFixedRows());
-    _eq(fixed['الهدايا والتكريمات'], 100, 'fixed expense saved in the rates file, eastern digits read');
+    _eq(fixed['إدارة الأكاديمية'], 100, 'fixed expense saved in the rates file, eastern digits read');
 
     // A day when October is still open, so its rows are recomputed, not kept frozen.
     const openDay = new Date(2026, 10, 1);
@@ -1531,6 +1567,54 @@ function integrationTest_ReportEdits() {
     last < 2 ? [] : ['الإجمالي', 'المتوسط'], 'total and average rebuilt after a delete');
 }
 
+/** اختبار تكاملي — تكريم طالب وحذفه ومبلغ التكريم عبر الـ API (S-60). */
+function integrationTest_Honors() {
+  const tag = String(Date.now()).slice(-6);
+  const teacher = 'سمية حمدي';
+  const now = new Date();
+  const year = String(now.getFullYear());
+  const pad = n => String(n).padStart(2, '0');
+  const today = `${year}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  _runIntegrationSubmission({
+    'اسم المعلم': teacher, 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '0',
+    'التقرير': _buildTestReport(`${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${year}`, 'مسائية', 1, `${tag}8`,
+      _sampleStudentText([{ name: `نور ${tag}`, female: true }])),
+    'ملاحظات خاصة للإدارة': '',
+  });
+  const deps = { password: `pass-${tag}`, payPassword: `pay-${tag}`, cache: _memoryCache(),
+    loginLock: LockService.getDocumentLock() || LockService.getUserLock() };
+  const call = (action, args, token) => handleApiRequest(
+    { action, token: token || '', test: true, year, args: args || {} }, deps);
+  const refusal = (action, args) => {
+    try { call(action, args, token); return ''; } catch (e) { return e.message; }
+  };
+  const token = call('login', { name: `مختبر ${tag}`, password: deps.password }).token;
+  const student = d => d.teachers.find(t => t.name === teacher).students.find(s => s.name === `نور ${tag}`);
+  const key = student(call('data', {}, token).data).key;
+
+  _has(refusal('addHonor', { teacher, key: 'لا-أحد', date: today }), 'لم يوجد', 'an unknown student refused');
+  _has(refusal('addHonor', { teacher, key, date: `${year}-12-32` }), 'اختر تاريخ', 'a bad date refused');
+  const old = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+  if (old.getFullYear() === now.getFullYear()) {
+    _has(refusal('addHonor', { teacher, key, date: `${year}-${pad(old.getMonth() + 1)}-01` }), 'ثابت',
+      'a frozen month refused');
+  }
+  const added = call('addHonor', { teacher, key, date: today, reason: 'ختم جزء' }, token).data;
+  const mine = added.honors.find(h => h.key === key);
+  _eq([student(added).honors, mine.reason, mine.editable], [1, 'ختم جزء', true], 'honor added and counted for the student');
+  _eq([added.log[0].action, added.log[0].name], ['تكريم', `مختبر ${tag}`], 'honor logged with the admin');
+
+  _has(refusal('saveHonorAmount', { amount: '75' }), 'افتح الرواتب', 'the amount needs the pay password');
+  call('unlockPay', { password: deps.payPassword }, token);
+  const priced = call('saveHonorAmount', { amount: '٧٥' }, token).data;
+  _eq([priced.honorAmount, priced.rateLog[0].action], [75, 'مبلغ التكريم'], 'amount saved in the rates file and logged there');
+
+  const ref = { row: mine.row, date: mine.date, teacher: mine.teacher, key };
+  _has(refusal('deleteHonor', Object.assign({}, ref, { key: 'x' })), 'حدّث الصفحة', 'a changed row refused');
+  const removed = call('deleteHonor', ref, token).data;
+  _eq([student(removed).honors, removed.log[0].action], [0, 'حذف تكريم'], 'honor removed and logged');
+}
+
 function runAllTests() {
   runAllUnitTests();
   const unitPass = _T.pass;
@@ -1550,6 +1634,7 @@ function runAllTests() {
   _suite('Integration: StudentDetails',              integrationTest_StudentDetails);
   _suite('Integration: Api',                         integrationTest_Api);
   _suite('Integration: ReportEdits',                 integrationTest_ReportEdits);
+  _suite('Integration: Honors',                      integrationTest_Honors);
   _report('INTEGRATION TESTS');
 
   console.log(`\nSUMMARY — Unit: ${unitPass}P/${unitFail}F | Integration: ${_T.pass}P/${_T.fail}F`);

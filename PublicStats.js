@@ -7,7 +7,8 @@
  * (S-53); students are the registry's. Teachers appear by code (S-17).
  * The month's expense is the teachers' pay (their own sheets' hours × «أسعار
  * الساعة», S-50), the fixed monthly expenses (S-51) and the other expenses in
- * «المصروفات», all in pounds (S-36, S-37).
+ * «المصروفات», and the honors of the month at their amount (S-60), all in pounds
+ * (S-36, S-37).
  * The computation is a pure function, computePublicStats, covered by unit tests.
  * ============================================================================
  */
@@ -24,7 +25,8 @@ const PUBLIC_STATS = {
   CURRENCY:     'EGP',
   // Pay, fixed expenses and the month's expense start here (S-50, S-51).
   PAY_FROM:     '2026-10',
-  FIXED_ITEMS:  ['الهدايا والتكريمات', 'إدارة الأكاديمية'],
+  // «الهدايا والتكريمات» left this list: the honors' own cost took its place (S-60).
+  FIXED_ITEMS:  ['إدارة الأكاديمية'],
   // A month listed here counts only these teachers' halaqat: the other
   // reports of September 2026 had errors (S-54).
   MONTH_TEACHERS: {
@@ -34,13 +36,14 @@ const PUBLIC_STATS = {
   TOTALS_HEADERS: [
     'المعلم', 'عدد الطلاب الكلي', 'الطلاب النشطون', 'الذكور', 'الإناث', 'عدد الحلقات',
     'ساعات التدريس', 'الحضور الكلي', 'متوسط الطلاب في الحلقة', 'حلقات الأطفال',
-    'ساعات الأطفال', 'حلقات الكبار', 'ساعات الكبار', 'المعلمون النشطون',
+    'ساعات الأطفال', 'حلقات الكبار', 'ساعات الكبار', 'المعلمون النشطون', 'التكريمات',
   ],
   MONTHLY_HEADERS: [
     'الشهر', 'من تاريخ', 'المعلم', 'الطلاب الجدد', 'من حضر في الشهر',
     'المستمرون من الشهر السابق', 'نسبة الاستمرار', 'عدد الحلقات', 'الساعات',
     'الحضور الكلي', 'متوسط الطلاب في الحلقة', 'حلقات الأطفال', 'حلقات الكبار',
     'المعلمون النشطون', 'مصروف الشهر', 'العملة', 'تكلفة ساعة التدريس', 'كفالة الطالب في الشهر',
+    'التكريمات',
   ],
 };
 
@@ -254,6 +257,8 @@ function computeTeacherPay(sheetReports, rates) {
  * @param {Array<Array>} [input.rates]  - «أسعار الساعة» values.
  * @param {Array<Object>} [input.sheetReports] - From readTeacherSheetReports.
  * @param {Array<Array>} [input.fixed]  - «المصروفات الثابتة» values.
+ * @param {Array<Array>} [input.honors] - «التكريمات» values (S-60).
+ * @param {Array<Array>} [input.honorAmounts] - «مبلغ التكريم» values.
  * @param {Date} input.today
  * @param {Object<string, Array<Array>>} [input.frozenMonthly] - Existing «شهرياً» rows by month.
  * @returns {{ totals: Array<Array>, monthly: Array<Array>, pay: Array<Object> }}
@@ -303,16 +308,20 @@ function computePublicStats(input) {
   };
   const activeTeachers = list => new Set(list.map(h => h.teacher)).size;
 
+  const honors = readHonors(input.honors);
+  const honorsOf = name => honors.filter(h => h.teacher === name).length;
   const totals = teachers.map(t => [t.code]
     .concat(studentColumns(teacherStudents(t)))
     .concat(halaqaColumns(halaqat.filter(h => h.teacher === t.name)))
-    .concat(['']));
+    .concat(['', honorsOf(t.name)]));
   totals.push([PUBLIC_STATS.ACADEMY]
     .concat(studentColumns(academyStudents))
     .concat(halaqaColumns(halaqat))
-    .concat([activeTeachers(halaqat.filter(h => h.date >= activeFrom))]));
+    .concat([activeTeachers(halaqat.filter(h => h.date >= activeFrom)), honors.length]));
 
-  return { totals, monthly: _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, studentsFrom, input), pay };
+  const monthly = _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, studentsFrom,
+    honors, input);
+  return { totals, monthly, pay };
 }
 
 /**
@@ -320,8 +329,9 @@ function computePublicStats(input) {
  * month keeps the rows already written for it (S-20).
  * @returns {Array<Array>}
  */
-function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, studentsFrom, input) {
+function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, studentsFrom, honors, input) {
   const months = Array.from(new Set(halaqat.map(h => h.month).concat(pay.map(p => p.month)))).sort();
+  const honorAmounts = readHonorAmounts(input.honorAmounts);
   const firstDay = halaqat.length ? halaqat.map(h => h.date).sort((a, b) => a - b)[0] : null;
   // The registry counts students from its first day only, so that month has no sponsorship (S-50).
   const partialMonth = studentsFrom && studentsFrom.slice(8) !== '01' ? studentsFrom.slice(0, 7) : '';
@@ -358,20 +368,24 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
       return { hours: n.hours, cols: [n.count, n.hours, n.attendance, n.average, n.kids, n.adults] };
     };
     const monthHalaqat = halaqat.filter(h => h.month === month);
+    const monthHonors = honors.filter(h => h.month === month);
 
     teachers.forEach(t => {
       rows.push([month, since, t.code]
         .concat(studentPart(teacherStudents(t)).cols)
         .concat(halaqaPart(monthHalaqat.filter(h => h.teacher === t.name)).cols)
-        .concat(['', '', '', '', '']));
+        .concat(['', '', '', '', '', monthHonors.filter(h => h.teacher === t.name).length]));
     });
 
     const sp = studentPart(academyStudents);
     const hp = halaqaPart(monthHalaqat);
     // A teacher without a rate would understate the cost, so it stays blank (S-36).
     const monthPay = pay.filter(p => p.month === month);
-    const total = month < PUBLIC_STATS.PAY_FROM || monthPay.some(p => p.pay === '') ? ''
-      : monthPay.reduce((a, p) => a + p.pay, 0) + fixedTotal + (expenses[month] ? expenses[month].amount : 0);
+    // Honors without an amount set would understate the cost too (S-60).
+    const honorAmount = monthHonors.length ? honorAmountFor(month, honorAmounts) : 0;
+    const total = month < PUBLIC_STATS.PAY_FROM || monthPay.some(p => p.pay === '') || honorAmount === '' ? ''
+      : monthPay.reduce((a, p) => a + p.pay, 0) + fixedTotal + (expenses[month] ? expenses[month].amount : 0)
+        + monthHonors.length * honorAmount;
     // The cost of an hour is over the teachers' own sheets' hours, as their pay is (S-50).
     const hours = monthPay.reduce((a, p) => a + p.hours, 0);
     rows.push([month, since, PUBLIC_STATS.ACADEMY].concat(sp.cols).concat(hp.cols).concat([
@@ -380,6 +394,7 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
       total === '' ? '' : PUBLIC_STATS.CURRENCY,
       total !== '' && hours ? _round(total / hours) : '',
       total !== '' && sp.attended && month !== partialMonth ? _round(total / sp.attended) : '',
+      monthHonors.length,
     ]));
   });
   return rows;
@@ -431,6 +446,8 @@ function refreshPublicStats(year, today) {
     rates:    readRateRows(),
     sheetReports,
     fixed:    readFixedRows(),
+    honors:   readHonorRows(registry),
+    honorAmounts: readHonorAmountRows(),
     today:    now,
     frozenMonthly,
   });
@@ -444,6 +461,9 @@ function refreshPublicStats(year, today) {
 
   const totalsTab = ss.getSheetByName(PUBLIC_STATS.TOTALS_TAB);
   totalsTab.getRange(1, 2).setValue(now).setNumberFormat('dd-mm-yyyy hh:mm');
+  // The headers again, so a file made before a new column (S-60) gets its title.
+  totalsTab.getRange(2, 1, 1, PUBLIC_STATS.TOTALS_HEADERS.length).setValues([PUBLIC_STATS.TOTALS_HEADERS]);
+  monthlyTab.getRange(1, 1, 1, PUBLIC_STATS.MONTHLY_HEADERS.length).setValues([PUBLIC_STATS.MONTHLY_HEADERS]);
   _rewriteBody(totalsTab, 3, stats.totals, PUBLIC_STATS.TOTALS_HEADERS.length);
   _rewriteBody(monthlyTab, 2, stats.monthly, PUBLIC_STATS.MONTHLY_HEADERS.length);
   return true;

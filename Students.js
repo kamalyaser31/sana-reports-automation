@@ -490,6 +490,7 @@ const REGISTRY = {
   // Kept only so registries made before S-48 do not list it as a teacher tab.
   RATES_TAB:    'أسعار الساعة',
   LOG_TAB:      'سجل التعديلات',
+  HONORS_TAB:   'التكريمات',
   DATE_FORMAT:  'dd-mm-yyyy',
   STUDENT_HEADERS: [
     'اسم الطالب', 'الجنس', 'فئة الطلاب', 'أول ظهور', 'آخر ظهور', 'عدد مرات الحضور',
@@ -880,7 +881,7 @@ function appendEditLog(year, name, action, details) {
  */
 function registryTeacherSheets(ss) {
   const reserved = [REGISTRY.ALIASES_TAB, REGISTRY.EXPENSES_TAB, REGISTRY.HALAQAT_TAB, REGISTRY.RATES_TAB,
-    REGISTRY.LOG_TAB];
+    REGISTRY.LOG_TAB, REGISTRY.HONORS_TAB];
   return ss.getSheets().filter(sh => reserved.indexOf(sh.getName()) === -1);
 }
 
