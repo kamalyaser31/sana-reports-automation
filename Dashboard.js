@@ -35,6 +35,8 @@ function _dayOrBlank(value) {
  * @param {Array<Array>} [input.rates] - «أسعار الساعة» values.
  * @param {Array<Array>} [input.log]   - «سجل التعديلات» values.
  * @param {Array<Array>} [input.rateLog] - «سجل الأسعار» values.
+ * @param {Array<Object>} [input.sheetHours] - From readTeacherSheetHours.
+ * @param {Array<Array>} [input.fixed] - «المصروفات الثابتة» values.
  * @param {boolean} [input.showPay] - Rates and pay leave only for an unlocked session (S-47).
  * @param {Array<Array>} input.aliases - «الأسماء البديلة» values.
  * @param {Array<Array>} input.legacy
@@ -44,8 +46,10 @@ function _dayOrBlank(value) {
 function buildDashboardData(input) {
   const stats = computePublicStats({
     teachers: input.teachers, halaqat: input.halaqat, expenses: input.expenses,
-    rates: input.rates, legacy: input.legacy, today: input.today,
+    rates: input.rates, sheetHours: input.sheetHours, fixed: input.fixed,
+    legacy: input.legacy, today: input.today,
   });
+  const fixed = readFixedExpenses(input.fixed);
   const rates = readRates(input.rates);
   const nameOf = {};
   input.teachers.forEach(t => { nameOf[t.code] = t.name; });
@@ -67,11 +71,14 @@ function buildDashboardData(input) {
     totals: named(stats.totals),
     monthly: named(stats.monthly),
     pay: input.showPay ? stats.pay : null,
-    rateLog: input.showPay ? rowsToEditLog((input.rateLog || []).map(r => [r[0], r[1], RATE_LOG_ACTION, r[2]])) : [],
+    // The rates log keeps no action column; a fixed item's name opens its row (S-51).
+    rateLog: input.showPay ? rowsToEditLog((input.rateLog || []).map(r => [r[0], r[1],
+      PUBLIC_STATS.FIXED_ITEMS.some(i => String(r[2]).indexOf(`${i}:`) === 0) ? FIXED_LOG_ACTION : RATE_LOG_ACTION, r[2]])) : [],
     unpriced: Array.from(new Set(stats.pay.filter(p => p.pay === '').map(p => p.teacher))).sort(),
-    // Teachers with pay may predate the registry (S-49), so the rate list joins both.
+    // A teacher with sheet hours may have no registry tab yet (S-50), so the rate list joins both.
     rateTeachers: Array.from(new Set(input.teachers.map(t => t.name).concat(stats.pay.map(p => p.teacher))))
       .sort().map(name => ({ name, rate: input.showPay ? (rates[name] || '') : '' })),
+    fixed: input.showPay ? PUBLIC_STATS.FIXED_ITEMS.map(item => ({ item, amount: fixed[item] || '' })) : null,
     teachers: input.teachers.map(t => ({
       name: t.name,
       rate: input.showPay ? (rates[t.name] || '') : '',
@@ -183,6 +190,8 @@ function _getDashboardData(year) {
         .map(r => [r[0], r[1], _teacherTabName(r[2])].concat(r.slice(3))),
       expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
       rates: readRateRows(),
+      sheetHours: readTeacherSheetHours(y),
+      fixed: readFixedRows(),
       rateLog: _SHOW_PAY ? readRateLogRows() : [],
       showPay: _SHOW_PAY,
       log: _readBody(registry.getSheetByName(REGISTRY.LOG_TAB)),
@@ -296,6 +305,25 @@ function dashboardSaveRate(teacher, rate, year, test) {
   return _withMode(test, () => {
     try {
       saveTeacherRate(teacher, rate, year);
+      return _getDashboardData(year);
+    } catch (error) {
+      throw _friendlyError(error);
+    }
+  });
+}
+
+/**
+ * Saves one fixed monthly expense (S-51).
+ * @param {string} item
+ * @param {number|string} amount - Pounds; blank clears it.
+ * @param {string} year
+ * @param {boolean} [test]
+ * @returns {Object} Fresh dashboard data.
+ */
+function dashboardSaveFixedExpense(item, amount, year, test) {
+  return _withMode(test, () => {
+    try {
+      saveFixedExpense(item, amount);
       return _getDashboardData(year);
     } catch (error) {
       throw _friendlyError(error);

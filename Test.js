@@ -677,6 +677,12 @@ function _sampleStatsInput(today, extra) {
     ],
     expenses: [['2026-10', 500, 'EGP'], ['2026-08', '', 'EGP']],
     rates: [['محمد نبيل', 100], ['أسماء علي', 80]],
+    sheetHours: [
+      { month: '2026-09', teacher: 'محمد نبيل', minutes: 420 },
+      { month: '2026-10', teacher: 'محمد نبيل', minutes: 60 },
+      { month: '2026-10', teacher: 'أسماء علي', minutes: 90 },
+    ],
+    fixed: [['الهدايا والتكريمات', 200], ['إدارة الأكاديمية', '']],
     legacy: [
       ['2026-09', 'الأكاديمية', 10, 12, 40, 4, 6, 7, 4, 5, 2],
       ['2026-09', 'T001', 6, 7, 20, 3.3, 6, 7, 0, 0, ''],
@@ -710,29 +716,38 @@ function _testPublicStats() {
     _eq(month('2026-10', 'T001').slice(3, 7), [1, 2, 1, 1], 'new, attended, continuing, ratio');
     const ac = month('2026-10', 'الأكاديمية');
     _eq(ac.slice(3, 14), [2, 3, 1, 1, 2, 2.5, 4, 2, 1, 1, 2], 'academy month');
-    _eq(ac.slice(14), [720, 'EGP', 288, 240], 'expense = pay 220 + other 500; cost per teaching hour; sponsorship');
-    _eq(month('2026-09', 'الأكاديمية').slice(14), [800, 'EGP', 61.54, ''],
-      'pre-system hours paid too: 1 + 7 hours × 100, ÷ 13 hours, no sponsorship (S-49)');
+    _eq(ac.slice(14), [920, 'EGP', 368, 306.67],
+      'expense = pay 220 + fixed 200 + other 500; ÷ 2.5 sheet hours; sponsorship over 3 students');
+    _eq(month('2026-09', 'الأكاديمية').slice(14), ['', '', '', ''], 'no expense before October 2026 (S-50)');
+    const lateStart = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), {
+      halaqat: [['r', new Date(2026, 9, 25), 'محمد نبيل', 'صباحية', '1', 'أطفال', 60, 2]] }));
+    _eq(lateStart.monthly.find(r => r[2] === PUBLIC_STATS.ACADEMY).slice(14), [920, 'EGP', 368, ''],
+      'the first month of the registry, begun after the 1st, has no sponsorship');
     _eq(month('2026-10', 'T001').slice(14), ['', '', '', ''], 'no expense or pay on teacher rows');
     const partial = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { rates: [['محمد نبيل', 100]] }));
     const academy = m => partial.monthly.find(r => r[0] === m && r[2] === PUBLIC_STATS.ACADEMY);
     _eq(academy('2026-10').slice(14), ['', '', '', ''], 'a teacher with halaqat and no rate blanks the expense');
-    _eq(academy('2026-09').slice(14, 16), [800, 'EGP'], 'a month whose teachers all have rates stays priced');
+    const allPriced = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { fixed: [] }));
+    _eq(allPriced.monthly.find(r => r[0] === '2026-10' && r[2] === PUBLIC_STATS.ACADEMY)[14], 720,
+      'no fixed expenses → pay and other expenses only');
 
     _section('المستحقات');
     _eq(out.pay, [
-      { month: '2026-09', teacher: 'محمد نبيل', hours: 8, rate: 100, pay: 800 },
       { month: '2026-10', teacher: 'أسماء علي', hours: 1.5, rate: 80, pay: 120 },
       { month: '2026-10', teacher: 'محمد نبيل', hours: 1, rate: 100, pay: 100 },
-    ], 'pay per teacher and month, resubmission and zero-count reports skipped');
-    _eq(partial.pay[1].rate + '|' + partial.pay[1].pay, '|', 'no rate → rate and pay blank');
-    const legacyOnly = computeTeacherPay([], { 'رجاء لطفي': 50 },
-      [['2026-09', 'T004', 5, 27, 19], ['2026-09', 'الأكاديمية', 5, 27, 19], ['2026-09', 'T_ab12', 1, 2, 3]],
-      teacherNamesByCode([]));
-    _eq(legacyOnly.map(p => [p.teacher, p.hours, p.pay]), [['T_ab12', 2, ''], ['رجاء لطفي', 27, 1350]],
-      'a pre-system teacher without a tab is named from CONFIG; an unknown code stays a code; the academy row is skipped');
-    const odd = computeTeacherPay(collectHalaqat([['x', new Date(2026, 9, 1), 'س', 'صباحية', '1', 'كبار', 50, 3]]), { 'س': 37.5 });
+    ], 'pay from the teacher sheets, from October 2026 only');
+    _eq(partial.pay[0].rate + '|' + partial.pay[0].pay, '|', 'no rate → rate and pay blank');
+    const odd = computeTeacherPay([{ month: '2026-10', teacher: 'س', minutes: 50 }], { 'س': 37.5 });
     _eq(odd[0].pay, 31, 'pay rounded to the pound (50 min × 37.5)');
+    _eq(teacherSheetMinutes([
+      ['01-10-2026', 'صباحية', 'كبار', '1:30', '3', ''],
+      ['02-10-2026', 'صباحية', 'كبار', '0:45', '2', '(تقرير مكرر) أُعيد'],
+      ['03-10-2026', 'مسائية', 'أطفال', 0.03125, '1', 'ملاحظة'],
+      ['الإجمالي', '', '', '3:00', '6', ''],
+      ['المتوسط', '', '', '1:00', '2', ''],
+    ]), 135, 'sheet minutes: h:mm and day fractions, without summaries or duplicates');
+    _eq(readFixedExpenses([['الهدايا والتكريمات', 200], ['إدارة الأكاديمية', ''], ['x', 5]]),
+      { 'الهدايا والتكريمات': 200 }, 'fixed expenses: known items with an amount only');
     _eq(readRates([['محمد نبيل', 100], ['x', ''], ['y', -5], ['', 9], ['z', '٤٠']]), { 'محمد نبيل': 100 },
       'blank, non-positive and nameless rates read as no rate');
 
@@ -826,11 +841,16 @@ function _testDashboard() {
     const open = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true,
       rateLog: [[new Date(2026, 9, 25, 10, 0), 'منى', 'محمد نبيل: 100']] }, input));
     _eq([open.teachers.map(t => t.rate), open.unpriced], [[80, 100], []], 'rates per teacher once unlocked, none missing');
-    _eq([open.pay.length, open.rateLog[0].details], [3, 'محمد نبيل: 100'], 'pay rows and rate log sent once unlocked');
-    const withLegacy = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
-      { legacy: input.legacy.concat([['2026-09', 'T004', 5, 27, 19]]) }));
-    _eq(withLegacy.rateTeachers.map(t => t.name), ['أسماء علي', 'رجاء لطفي', 'محمد نبيل'],
-      'rate list includes a pre-system teacher without a registry tab');
+    _eq([open.pay.length, open.rateLog[0].details], [2, 'محمد نبيل: 100'], 'pay rows and rate log sent once unlocked');
+    _eq([d.fixed, open.fixed], [null, [{ item: 'الهدايا والتكريمات', amount: 200 }, { item: 'إدارة الأكاديمية', amount: '' }]],
+      'fixed expenses only once unlocked');
+    const fixedLog = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
+      { rateLog: [[new Date(2026, 9, 25, 9), 'منى', 'إدارة الأكاديمية: 900'], [new Date(2026, 9, 25, 8), 'منى', 'محمد نبيل: 100']] }));
+    _eq(fixedLog.rateLog.map(e => e.action), [RATE_LOG_ACTION, FIXED_LOG_ACTION], 'rates log rows named by kind, newest first');
+    const withSheet = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
+      { sheetHours: input.sheetHours.concat([{ month: '2026-10', teacher: 'رجاء لطفي', minutes: 60 }]) }));
+    _eq(withSheet.rateTeachers.map(t => t.name), ['أسماء علي', 'رجاء لطفي', 'محمد نبيل'],
+      'rate list includes a teacher with sheet hours and no registry tab');
     _eq(d.rateTeachers.map(t => t.rate), ['', ''], 'rate list has no amounts before the pay password');
     const oldLog = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, {
       log: [[new Date(), 'منى', RATE_LOG_ACTION, 'محمد نبيل: 100'], [new Date(), 'منى', 'مصروف', '2026-10: 5']] }));
@@ -929,6 +949,8 @@ function _testApi() {
     _ok(!apiPayOpen(sess(), 'money'), 'pay closed after login');
     _eq(throws(() => handleApiRequest({ action: 'saveRate', token: tok, year: '2026', args: { teacher: 'x', rate: '5' } },
       payDeps)), 'error', 'saving a rate needs the pay password, and keeps the session');
+    _eq(throws(() => handleApiRequest({ action: 'saveFixed', token: tok, year: '2026',
+      args: { item: 'إدارة الأكاديمية', amount: '5' } }, payDeps)), 'error', 'a fixed expense needs the pay password too');
     _eq(throws(() => apiUnlockPay(sess(), tok, 'secret', 'money', payCache)), 'error', 'login password does not open pay');
     _ok(!!apiSession(tok, 'secret', payCache), 'a wrong pay password keeps the admin logged in');
     apiUnlockPay(sess(), tok, 'money', 'money ', payCache);
@@ -1192,19 +1214,22 @@ function integrationTest_PublicStats() {
   const student = `سامي ${tag}`;
   _runIntegrationSubmission({
     'اسم المعلم': 'سمية حمدي', 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '30',
-    'التقرير': _buildTestReport('10-09-2026', 'مسائية', 1, `${tag}9`, _sampleStudentText([{ name: student }])),
+    'التقرير': _buildTestReport('10-10-2026', 'مسائية', 1, `${tag}9`, _sampleStudentText([{ name: student }])),
     'ملاحظات خاصة للإدارة': '',
   });
 
   _TEST_MODE = true;
   try {
-    saveExpense('2026-09', '٤٠٠');
-    saveExpense('2026-09', 450);
+    saveExpense('2026-10', '٤٠٠');
+    saveExpense('2026-10', 450);
     let refused = '';
     try { saveExpense('2026-9', 10); } catch (e) { refused = e.message; }
     _ok(refused !== '', 'malformed month refused');
     // 60 pounds an hour makes each teacher's pay their minutes, to check the sum.
-    const teachers = registryTeacherSheets(_findRegistry('2026')).map(sh => sh.getName());
+    // Pay follows the teacher sheets (S-50), whose teachers may have no registry tab.
+    const sheetHours = readTeacherSheetHours('2026').filter(h => h.month === '2026-10');
+    const teachers = Array.from(new Set(registryTeacherSheets(_findRegistry('2026')).map(sh => sh.getName())
+      .concat(sheetHours.map(h => h.teacher))));
     const oldTab = () => _findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB);
     const registryRatesBefore = oldTab() ? JSON.stringify(_readBody(oldTab())) : '';
     saveTeacherRate(teachers[0], '٧٠');
@@ -1216,9 +1241,16 @@ function integrationTest_PublicStats() {
     refused = '';
     try { saveTeacherRate(teachers[0], '0'); } catch (e) { refused = e.message; }
     _ok(refused !== '', 'zero rate refused');
+    saveFixedExpense('الهدايا والتكريمات', '١٠٠');
+    saveFixedExpense('إدارة الأكاديمية', '');
+    refused = '';
+    try { saveFixedExpense('إيجار', 10); } catch (e) { refused = e.message; }
+    _ok(refused !== '', 'unknown fixed item refused');
+    const fixed = readFixedExpenses(readFixedRows());
+    _eq(fixed['الهدايا والتكريمات'], 100, 'fixed expense saved in the rates file, eastern digits read');
 
-    // A day when September is still open, so its rows are recomputed, not kept frozen.
-    const openDay = new Date(2026, 9, 1);
+    // A day when October is still open, so its rows are recomputed, not kept frozen.
+    const openDay = new Date(2026, 10, 1);
     _ok(refreshPublicStats('2026', openDay), 'public file refreshed');
     const ss = SpreadsheetApp.openById(_firstNotTrashed(
       getRootFolder().getFoldersByName('2026').next().getFilesByName(`${PUBLIC_STATS.FILE_PREFIX} 2026`)).getId());
@@ -1232,11 +1264,14 @@ function integrationTest_PublicStats() {
       .concat(_readBody(ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB)));
     _ok(!cells.some(r => r.some(v => String(v).indexOf(tag) !== -1)), 'no student name in the public file');
     _ok(!cells.some(r => r.some(v => v === 'سمية حمدي')), 'no teacher name in the public file');
-    const sept = _readBody(ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB))
-      .find(r => String(r[0]) === '2026-09' && r[2] === PUBLIC_STATS.ACADEMY);
-    _eq([sept[14], sept[15]], [450 + Math.round(sept[8] * 60), 'EGP'], 'expense = pay + other expenses, updated in place');
+    const oct = _readBody(ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB))
+      .find(r => String(r[0]) === '2026-10' && r[2] === PUBLIC_STATS.ACADEMY);
+    const fixedTotal = Object.keys(fixed).reduce((a, k) => a + fixed[k], 0);
+    const pay = computeTeacherPay(sheetHours, readRates(readRateRows())).reduce((a, p) => a + p.pay, 0);
+    _ok(sheetHours.length > 0, 'teacher sheet hours read for October');
+    _eq([oct[14], oct[15]], [450 + fixedTotal + pay, 'EGP'], 'expense = sheet pay + fixed + other, updated in place');
     const expenses = readExpenseMonths(_readBody(_findRegistry('2026').getSheetByName(REGISTRY.EXPENSES_TAB)));
-    _eq(expenses.filter(m => m === '2026-09').length, 1, 'one expense row per month');
+    _eq(expenses.filter(m => m === '2026-10').length, 1, 'one expense row per month');
   } finally {
     _TEST_MODE = false;
   }

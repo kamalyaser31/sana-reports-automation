@@ -37,6 +37,7 @@ const API_SESSION_ACTIONS = ['data', 'unlockPay', 'lockPay'];
  * Defined here because API_WRITES reads it while this file loads, before Students.js.
  */
 const RATE_LOG_ACTION = 'سعر الساعة';
+const FIXED_LOG_ACTION = 'مصروف ثابت';
 
 /** Write actions: their handler and the Arabic words of their log row (S-44). */
 const API_WRITES = {
@@ -67,6 +68,13 @@ const API_WRITES = {
     log: 'rates',
     run: (a, year, test) => dashboardSaveRate(a.teacher, a.rate, year, test),
     details: a => `${a.teacher}: ${a.rate}`,
+  },
+  saveFixed: {
+    label: FIXED_LOG_ACTION,
+    pay: true,
+    log: 'rates',
+    run: (a, year, test) => dashboardSaveFixedExpense(a.item, a.amount, year, test),
+    details: a => `${a.item}: ${a.amount || 0}`,
   },
   saveExpense: {
     label: 'مصروف',

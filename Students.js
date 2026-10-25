@@ -767,8 +767,10 @@ const RATES_FILE = {
   NAME:        'أسعار ساعات معلمي سنا',
   RATES_TAB:   'أسعار الساعة',
   LOG_TAB:     'سجل الأسعار',
+  FIXED_TAB:   'المصروفات الثابتة',
   HEADERS:     ['المعلم', 'السعر'],
   LOG_HEADERS: ['الوقت', 'الاسم', 'التفاصيل'],
+  FIXED_HEADERS: ['البند', 'المبلغ'],
 };
 
 /** My Drive of the owner, or the test folder while testing. */
@@ -807,6 +809,37 @@ function readRateRows() {
 function readRateLogRows() {
   const ss = _findRatesFile();
   return ss ? _readBody(ss.getSheetByName(RATES_FILE.LOG_TAB)) : [];
+}
+
+/** «المصروفات الثابتة» values (S-51), or [] before the first is saved. */
+function readFixedRows() {
+  const ss = _findRatesFile();
+  const sheet = ss && ss.getSheetByName(RATES_FILE.FIXED_TAB);
+  return sheet ? _readBody(sheet) : [];
+}
+
+/**
+ * Saves one fixed monthly expense in the rates file (S-51); it counts in every
+ * open month from PUBLIC_STATS.PAY_FROM. A blank amount clears it.
+ * @param {string} item - One of PUBLIC_STATS.FIXED_ITEMS.
+ * @param {number|string} amount - Pounds.
+ */
+function saveFixedExpense(item, amount) {
+  if (PUBLIC_STATS.FIXED_ITEMS.indexOf(item) === -1) throw new Error(`لا بند ثابت باسم «${item}».`);
+  const text = normalizeDigitsAndText(String(amount === undefined ? '' : amount)).trim();
+  const value = text === '' ? 0 : Number(text);
+  if (!(value >= 0)) throw new Error('المبلغ رقم لا يقل عن صفر.');
+  _withScriptLock(() => {
+    const ss = _getOrCreateRatesFile();
+    let sheet = ss.getSheetByName(RATES_FILE.FIXED_TAB);
+    if (!sheet) {
+      sheet = ss.insertSheet(RATES_FILE.FIXED_TAB);
+      _styleHeader(sheet, RATES_FILE.FIXED_HEADERS);
+    }
+    const index = _readBody(sheet).findIndex(r => String(r[0]).trim() === item);
+    const row = index === -1 ? sheet.getLastRow() + 1 : index + 2;
+    sheet.getRange(row, 1, 1, 2).setValues([[item, Math.round(value * 100) / 100]]);
+  });
 }
 
 /**
@@ -1106,7 +1139,7 @@ function saveTeacherRate(teacher, rate, year) {
   if (!(value > 0)) throw new Error('سعر الساعة رقم أكبر من صفر.');
   _withScriptLock(() => {
     const ss = _registryOrThrow(year);
-    // A teacher from CONFIG may have pay from «قبل النظام» before any registry tab (S-49).
+    // A teacher from CONFIG may have sheet hours before any registry tab (S-50).
     const known = Object.keys(CONFIG.TEACHERS).some(k => _teacherTabName(CONFIG.TEACHERS[k].name) === teacher);
     if (!teacher || !(known || ss.getSheetByName(_teacherTabName(teacher)))) throw new Error(`لا معلم باسم «${teacher}».`);
     const sheet = _getOrCreateRatesFile().getSheetByName(RATES_FILE.RATES_TAB);
