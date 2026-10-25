@@ -30,7 +30,6 @@ function _dayOrBlank(value) {
  * @param {Object} input
  * @param {string} input.year
  * @param {Array<{name: string, code: string, students: Array<Object>}>} input.teachers
- * @param {Array<Array>} input.halaqat
  * @param {Array<Array>} input.expenses
  * @param {Array<Array>} [input.rates] - «أسعار الساعة» values.
  * @param {Array<Array>} [input.log]   - «سجل التعديلات» values.
@@ -39,15 +38,14 @@ function _dayOrBlank(value) {
  * @param {Array<Array>} [input.fixed] - «المصروفات الثابتة» values.
  * @param {boolean} [input.showPay] - Rates and pay leave only for an unlocked session (S-47).
  * @param {Array<Array>} input.aliases - «الأسماء البديلة» values.
- * @param {Array<Array>} input.legacy
  * @param {Date} input.today
  * @returns {Object}
  */
 function buildDashboardData(input) {
   const stats = computePublicStats({
-    teachers: input.teachers, halaqat: input.halaqat, expenses: input.expenses,
+    teachers: input.teachers, expenses: input.expenses,
     rates: input.rates, sheetHalaqat: input.sheetHalaqat, fixed: input.fixed,
-    legacy: input.legacy, today: input.today,
+    today: input.today,
   });
   const fixed = readFixedExpenses(input.fixed);
   const rates = readRates(input.rates);
@@ -75,9 +73,7 @@ function buildDashboardData(input) {
     rateLog: input.showPay ? rowsToEditLog((input.rateLog || []).map(r => [r[0], r[1],
       PUBLIC_STATS.FIXED_ITEMS.some(i => String(r[2]).indexOf(`${i}:`) === 0) ? FIXED_LOG_ACTION : RATE_LOG_ACTION, r[2]])) : [],
     unpriced: Array.from(new Set(stats.pay.filter(p => p.pay === '').map(p => p.teacher))).sort(),
-    // A teacher with sheet hours may have no registry tab yet (S-50), so the rate list joins both.
-    rateTeachers: Array.from(new Set(input.teachers.map(t => t.name).concat(stats.pay.map(p => p.teacher))))
-      .sort().map(name => ({ name, rate: input.showPay ? (rates[name] || '') : '' })),
+    rateTeachers: input.teachers.map(t => t.name).sort().map(name => ({ name, rate: input.showPay ? (rates[name] || '') : '' })),
     fixed: input.showPay ? PUBLIC_STATS.FIXED_ITEMS.map(item => ({ item, amount: fixed[item] || '' })) : null,
     teachers: input.teachers.map(t => ({
       name: t.name,
@@ -175,28 +171,19 @@ function _getDashboardData(year) {
     const y = String(year || new Date().getFullYear());
     const registry = _findRegistry(y);
     if (!registry) throw new Error(`لا سجل طلاب لسنة ${y} بعد، أو لم يُشارَك معك مجلد الأكاديمية.`);
-    const teachers = registryTeacherSheets(registry)
-      .map(sh => ({
-        name: sh.getName(),
-        code: _resolveTeacher({ rawTeacherName: sh.getName() }, []).teacherId,
-        students: readStudentsTab(sh).students,
-        detailCols: studentDetailColumns(_headerRow(sh)),
-      }));
-    const publicFile = _findPublicFile(y);
+    const sheetHalaqat = readTeacherSheetHalaqat(y);
+    const teachers = academyTeachers(registry, sheetHalaqat);
     return buildDashboardData({
       year: y,
       teachers,
-      halaqat: _readBody(registry.getSheetByName(REGISTRY.HALAQAT_TAB))
-        .map(r => [r[0], r[1], _teacherTabName(r[2])].concat(r.slice(3))),
       expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
       rates: readRateRows(),
-      sheetHalaqat: readTeacherSheetHalaqat(y),
+      sheetHalaqat,
       fixed: readFixedRows(),
       rateLog: _SHOW_PAY ? readRateLogRows() : [],
       showPay: _SHOW_PAY,
       log: _readBody(registry.getSheetByName(REGISTRY.LOG_TAB)),
       aliases: _readBody(registry.getSheetByName(REGISTRY.ALIASES_TAB)),
-      legacy: publicFile ? _readBody(publicFile.getSheetByName(PUBLIC_STATS.LEGACY_TAB)) : [],
       today: new Date(),
     });
   } catch (error) {
@@ -327,16 +314,4 @@ function dashboardSaveFixedExpenses(list, year, test) {
       throw _friendlyError(error);
     }
   });
-}
-
-/**
- * The public statistics file of a year, or null.
- * @param {string} year
- * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet|null}
- */
-function _findPublicFile(year) {
-  const root = _findRootFolder();
-  const yearFolder = root && _firstNotTrashed(root.getFoldersByName(sanitizeFilename(year)));
-  const file = yearFolder && _firstNotTrashed(yearFolder.getFilesByName(`${PUBLIC_STATS.FILE_PREFIX} ${year}`));
-  return file ? SpreadsheetApp.openById(file.getId()) : null;
 }

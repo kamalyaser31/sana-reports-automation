@@ -634,11 +634,7 @@ function _testMergeStudents() {
 }
 
 function _testRegistryRows() {
-  _suite('buildHalaqaRow / rowsToAliases', () => {
-    const ctx = _sampleContext(5, [{ name: 'حمزة علاء' }], { reportId: 'r1', session: 'صباحية', halaNum: '2', minutes: 90 });
-    _eq(buildHalaqaRow(ctx, 0).slice(2), ['سمية حمدي', 'صباحية', '2', 'أطفال', 90, 0], 'halaqa row columns');
-    _eq(buildHalaqaRow(ctx, 0)[0], 'r1', 'keyed by report_id');
-
+  _suite('rowsToAliases', () => {
     const aliases = rowsToAliases([
       ['سمية حمدي', ' حمزه  عالء ', 'حمزة علاء', ''],
       ['سمية حمدي', 'منى', 'منى سامي', new Date()],
@@ -657,7 +653,6 @@ function _testRegistryRows() {
 function _sampleStatsInput(today, extra) {
   const rec = (name, slots) => ({ key: studentNameKey(name), name, gender: STUDENT_GENDER.MALE, slots });
   const slot = (day, s, cat) => ({ [`${day}|${s}|1`]: [cat, 0, 0] });
-  const row = (id, y, m, d, t, s, cat, min, n) => [id, new Date(y, m, d), t, s, '1', cat, min, n];
   return Object.assign({
     teachers: [
       { name: 'أسماء علي', code: 'T002', students: [
@@ -669,26 +664,15 @@ function _sampleStatsInput(today, extra) {
         rec('محمد', slot('2026-10-03', 'صباحية', 'أطفال')),
       ] },
     ],
-    halaqat: [
-      row('r1', 2026, 8, 28, 'محمد نبيل', 'صباحية', 'أطفال', 60, 1),
-      row('r2', 2026, 9, 3, 'محمد نبيل', 'صباحية', 'أطفال', 60, 2),
-      row('r2b', 2026, 9, 3, 'محمد نبيل', 'صباحية', 'أطفال', 60, 0),
-      row('r3', 2026, 9, 5, 'أسماء علي', 'مسائية', 'كبار', 90, 2),
-    ],
     expenses: [['2026-10', 500, 'EGP'], ['2026-08', '', 'EGP']],
     rates: [['محمد نبيل', 100], ['أسماء علي', 80]],
-    // The registry's October halaqat again, as the teacher sheets hold them (S-52);
-    // the September one is before PAY_FROM and ignored.
+    // The halaqat as the teacher sheets hold them (S-53).
     sheetHalaqat: [
-      { teacher: 'محمد نبيل', date: new Date(2026, 8, 2), month: '2026-09', category: 'أطفال', minutes: 420, attendance: 9 },
+      { teacher: 'محمد نبيل', date: new Date(2026, 8, 28), month: '2026-09', category: 'أطفال', minutes: 60, attendance: 1 },
       { teacher: 'محمد نبيل', date: new Date(2026, 9, 3), month: '2026-10', category: 'أطفال', minutes: 60, attendance: 2 },
       { teacher: 'أسماء علي', date: new Date(2026, 9, 5), month: '2026-10', category: 'كبار', minutes: 90, attendance: 2 },
     ],
     fixed: [['الهدايا والتكريمات', 200], ['إدارة الأكاديمية', '']],
-    legacy: [
-      ['2026-09', 'الأكاديمية', 10, 12, 40, 4, 6, 7, 4, 5, 2],
-      ['2026-09', 'T001', 6, 7, 20, 3.3, 6, 7, 0, 0, ''],
-    ],
     today,
   }, extra || {});
 }
@@ -699,14 +683,12 @@ function _testPublicStats() {
     const byCode = code => out.totals.find(r => r[0] === code);
 
     _section('الإجمالي');
-    _eq(out.totals.map(r => r[0]), ['T001', 'T002', 'الأكاديمية', 'منذ التأسيس'], 'rows ordered by code, then academy and since start');
-    _eq(byCode('T001').slice(1), [2, 2, 2, 0, 2, 2, 3, 1.5, 2, 2, 0, 0, ''], 'teacher totals (resubmission row skipped)');
+    _eq(out.totals.map(r => r[0]), ['T001', 'T002', 'الأكاديمية'], 'rows ordered by code, then the academy');
+    _eq(byCode('T001').slice(1), [2, 2, 2, 0, 2, 2, 3, 1.5, 2, 2, 0, 0, ''], 'teacher totals');
     _eq(byCode('T002').slice(5, 9), [1, 1.5, 2, 2], 'second teacher halaqat, hours, attendance, average');
     _eq(byCode('الأكاديمية')[1], 3, 'two-word name once across teachers, single name per teacher');
     _eq(byCode('الأكاديمية').slice(5, 9), [3, 3.5, 5, 1.7], 'academy halaqat');
     _eq(byCode('الأكاديمية')[13], 2, 'active teachers in the last 30 days');
-    _eq(byCode('منذ التأسيس').slice(1, 13), ['', '', '', '', 13, 15.5, 45, 3.5, 8, 9, 5, 6.5],
-      'since start = legacy academy rows + registry, no student count');
     const later = computePublicStats(_sampleStatsInput(new Date(2026, 11, 1)));
     _eq(later.totals.find(r => r[0] === 'الأكاديمية')[2], 0, 'nobody active after 30 days');
 
@@ -721,8 +703,11 @@ function _testPublicStats() {
     _eq(ac.slice(14), [920, 'EGP', 368, 306.67],
       'expense = pay 220 + fixed 200 + other 500; ÷ 2.5 sheet hours; sponsorship over 3 students');
     _eq(month('2026-09', 'الأكاديمية').slice(14), ['', '', '', ''], 'no expense before October 2026 (S-50)');
-    const lateStart = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), {
-      halaqat: [['r', new Date(2026, 9, 25), 'محمد نبيل', 'صباحية', '1', 'أطفال', 60, 2]] }));
+    const sample = _sampleStatsInput(new Date(2026, 9, 20));
+    const lateStart = computePublicStats(Object.assign(sample, {
+      sheetHalaqat: sample.sheetHalaqat.slice(1),
+      teachers: [{ name: 'محمد نبيل', code: 'T001', students: [{ key: 'a', name: 'حمزة علاء',
+        gender: STUDENT_GENDER.MALE, slots: { '2026-10-25|صباحية|1': ['أطفال', 0, 0] } }] }] }));
     _eq(lateStart.monthly.find(r => r[2] === PUBLIC_STATS.ACADEMY).slice(14), [920, 'EGP', 368, ''],
       'the first month of the registry, begun after the 1st, has no sponsorship');
     _eq(month('2026-10', 'T001').slice(14), ['', '', '', ''], 'no expense or pay on teacher rows');
@@ -751,10 +736,6 @@ function _testPublicStats() {
     ], 'س', '2026-10').map(h => [h.date.getDate(), h.month, h.category, h.minutes, h.attendance]),
     [[12, '2026-10', 'كبار', 90, 3], [3, '2026-10', 'أطفال', 45, 1], [1, '2026-10', 'كبار', 30, 0]],
     'sheet halaqat: Arabic and numeric dates, h:mm and day fractions, no summaries or duplicates');
-    const withLegacyOct = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20),
-      { legacy: _sampleStatsInput(new Date()).legacy.concat([['2026-10', 'الأكاديمية', 50, 60, 70, 1, 0, 0, 0, 0, 2]]) }));
-    _eq(withLegacyOct.totals.find(r => r[0] === 'منذ التأسيس')[5], 13,
-      'legacy October rows left out of since start: the sheets cover October');
     _eq(readFixedExpenses([['الهدايا والتكريمات', 200], ['إدارة الأكاديمية', ''], ['x', 5]]),
       { 'الهدايا والتكريمات': 200 }, 'fixed expenses: known items with an amount only');
     _eq(readRates([['محمد نبيل', 100], ['x', ''], ['y', -5], ['', 9], ['z', '٤٠']]), { 'محمد نبيل': 100 },
@@ -857,9 +838,9 @@ function _testDashboard() {
       { rateLog: [[new Date(2026, 9, 25, 9), 'منى', 'إدارة الأكاديمية: 900'], [new Date(2026, 9, 25, 8), 'منى', 'محمد نبيل: 100']] }));
     _eq(fixedLog.rateLog.map(e => e.action), [RATE_LOG_ACTION, FIXED_LOG_ACTION], 'rates log rows named by kind, newest first');
     const withSheet = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
-      { sheetHalaqat: input.sheetHalaqat.concat([{ teacher: 'رجاء لطفي', date: new Date(2026, 9, 7), month: '2026-10', category: 'كبار', minutes: 60, attendance: 1 }]) }));
+      { teachers: input.teachers.concat([{ name: 'رجاء لطفي', code: 'T004', students: [] }]) }));
     _eq(withSheet.rateTeachers.map(t => t.name), ['أسماء علي', 'رجاء لطفي', 'محمد نبيل'],
-      'rate list includes a teacher with sheet hours and no registry tab');
+      'rate list holds every academy teacher, one without students too');
     _eq(d.rateTeachers.map(t => t.rate), ['', ''], 'rate list has no amounts before the pay password');
     const oldLog = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, {
       log: [[new Date(), 'منى', RATE_LOG_ACTION, 'محمد نبيل: 100'], [new Date(), 'منى', 'مصروف', '2026-10: 5']] }));
@@ -1166,14 +1147,6 @@ function integrationTest_StudentsRegistry() {
   _eq(first.newStudents, [hamza, hoda], 'first report: both new');
   const resent = submit('01-09-2026', `${tag}1`, [{ name: hamza, grade: 'إعادة' }, { name: hoda, female: true }]);
   _eq(deriveStudentStats(find(hamza).slots).attendance, 1, 'resubmission not counted');
-  const halaqat = () => {
-    _TEST_MODE = true;
-    try { return _readBody(_findRegistry('2026').getSheetByName(REGISTRY.HALAQAT_TAB)); }
-    finally { _TEST_MODE = false; }
-  };
-  const counted = id => halaqat().filter(r => r[0] === id).map(r => r[7]);
-  _eq(counted(first.executionId), [2], 'halaqa row: two students counted');
-  _eq(counted(resent.executionId), [0], 'resubmission row counts nobody');
   _eq(deriveStudentStats(find(hamza).slots).repeats, 1, 'resubmission adds no repeat');
 
   _section('عمود إداري يبقى مع صفه');
@@ -1268,11 +1241,6 @@ function integrationTest_PublicStats() {
     _ok(refreshPublicStats('2026', openDay), 'public file refreshed');
     const ss = SpreadsheetApp.openById(_firstNotTrashed(
       getRootFolder().getFoldersByName('2026').next().getFilesByName(`${PUBLIC_STATS.FILE_PREFIX} 2026`)).getId());
-    const legacy = ss.getSheetByName(PUBLIC_STATS.LEGACY_TAB);
-    if (legacy.getLastRow() < 2) legacy.appendRow(['2026-08', PUBLIC_STATS.ACADEMY, 1, 1, 1, 1, 0, 0, 1, 1, 1]);
-    const legacyBefore = JSON.stringify(_readBody(legacy));
-    refreshPublicStats('2026', openDay);
-    _eq(JSON.stringify(_readBody(legacy)), legacyBefore, '«قبل النظام» unchanged by the refresh');
 
     const cells = _readBody(ss.getSheetByName(PUBLIC_STATS.TOTALS_TAB))
       .concat(_readBody(ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB)));

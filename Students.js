@@ -433,18 +433,6 @@ function _cloneStudent(s) {
 }
 
 /**
- * One «الحلقات» row (S-15). A report in which nobody was counted keeps its row
- * with 0, and the public statistics skip it.
- * @param {Object} report - From buildReportContext.
- * @param {number} counted
- * @returns {Array}
- */
-function buildHalaqaRow(report, counted) {
-  return [report.reportId, report.date, report.teacher, report.session, report.halaNum,
-    report.category, report.minutes, counted];
-}
-
-/**
  * Reads «الأسماء البديلة» values (header excluded) into alias objects.
  * @param {Array<Array>} values
  * @returns {Array<{row: number, teacher: string, from: string, to: string, applied: boolean}>}
@@ -497,6 +485,7 @@ const REGISTRY = {
   FILE_PREFIX:  'طلاب أكاديمية سنا',
   ALIASES_TAB:  'الأسماء البديلة',
   EXPENSES_TAB: 'المصروفات',
+  // No longer written (S-53); kept so registries that have it do not list it as a teacher tab.
   HALAQAT_TAB:  'الحلقات',
   // Kept only so registries made before S-48 do not list it as a teacher tab.
   RATES_TAB:    'أسعار الساعة',
@@ -510,8 +499,6 @@ const REGISTRY = {
   ALIAS_HEADERS:   ['المعلم', 'الاسم كما ورد', 'الاسم الصحيح', 'تاريخ التطبيق'],
   EXPENSE_HEADERS: ['الشهر', 'المبلغ', 'العملة'],
   LOG_HEADERS:     ['الوقت', 'الاسم', 'الفعل', 'التفاصيل'],
-  HALAQA_HEADERS:  ['report_id', 'التاريخ', 'المعلم', 'الفترة', 'رقم الحلقة', 'الفئة',
-    'المدة بالدقائق', 'الطلاب المحسوبون'],
 };
 
 /** Columns of a teacher tab that hold dates (1-based): D, E, H, J. */
@@ -536,7 +523,6 @@ function recordStudents(yearFolder, data) {
   const created = result.students.filter(s => !known.has(s.key));
   if (created.length) _carryDetailsFromLastYear(sheet, created, report.teacher, data.submissionYear);
   writeStudentsTab(sheet, result.students, current.orphans);
-  _appendHalaqaOnce(ss.getSheetByName(REGISTRY.HALAQAT_TAB), buildHalaqaRow(report, result.counted));
   return { newStudents: result.newStudents, counted: result.counted };
 }
 
@@ -742,9 +728,6 @@ function getOrCreateRegistry(yearFolder, year) {
   first.setName(REGISTRY.ALIASES_TAB);
   _styleHeader(first, REGISTRY.ALIAS_HEADERS);
   _styleHeader(ss.insertSheet(REGISTRY.EXPENSES_TAB), REGISTRY.EXPENSE_HEADERS);
-  const halaqat = ss.insertSheet(REGISTRY.HALAQAT_TAB);
-  _styleHeader(halaqat, REGISTRY.HALAQA_HEADERS);
-  halaqat.hideSheet();
 
   const previous = _findRegistry(String(Number(year) - 1));
   if (previous) {
@@ -1019,18 +1002,6 @@ function writeStudentsTab(sheet, students, orphans) {
   STUDENT_DATE_COLUMNS.forEach(c => sheet.getRange(2, c, padded.length, 1).setNumberFormat(REGISTRY.DATE_FORMAT));
 }
 
-/**
- * Appends a «الحلقات» row unless its report_id is already there.
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
- * @param {Array} row
- */
-function _appendHalaqaOnce(sheet, row) {
-  const ids = _readBody(sheet).map(r => r[0]);
-  if (ids.indexOf(row[0]) !== -1) return;
-  sheet.appendRow(row);
-  sheet.getRange(sheet.getLastRow(), 2).setNumberFormat(REGISTRY.DATE_FORMAT);
-}
-
 // ============================================================================
 // 7. ADMIN WRITES (called by the dashboard in M5, and by the nightly trigger)
 // ============================================================================
@@ -1164,10 +1135,10 @@ function saveTeacherRates(list, year) {
   });
   _withScriptLock(() => {
     const ss = _registryOrThrow(year);
+    const y = String(year || new Date().getFullYear());
+    const known = new Set(academyTeachers(ss, readTeacherSheetHalaqat(y)).map(t => t.name));
     rows.forEach(([teacher]) => {
-      // A teacher from CONFIG may have sheet hours before any registry tab (S-50).
-      const known = Object.keys(CONFIG.TEACHERS).some(k => _teacherTabName(CONFIG.TEACHERS[k].name) === teacher);
-      if (!teacher || !(known || ss.getSheetByName(_teacherTabName(teacher)))) throw new Error(`لا معلم باسم «${teacher}».`);
+      if (!known.has(teacher)) throw new Error(`لا معلم باسم «${teacher}».`);
     });
     _upsertRows(_getOrCreateRatesFile().getSheetByName(RATES_FILE.RATES_TAB), rows);
   });

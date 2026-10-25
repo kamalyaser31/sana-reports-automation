@@ -2,10 +2,9 @@
  * ============================================================================
  * PublicStats.js — Public statistics file for donors (M3)
  * ============================================================================
- * Computes name-free numbers from the students registry and its «الحلقات» tab
- * only (S-18), and writes them to «إحصاءات أكاديمية سنا <year>». Teachers
- * appear by code (S-17). The «قبل النظام» tab is pasted once by hand and never
- * written here (S-28); it is read for the «منذ التأسيس» row (S-30).
+ * Computes name-free numbers and writes them to «إحصاءات أكاديمية سنا <year>».
+ * Halaqat, hours and attendance are the teachers' own sheets', every month
+ * (S-53); students are the registry's. Teachers appear by code (S-17).
  * The month's expense is the teachers' pay (their own sheets' hours × «أسعار
  * الساعة», S-50), the fixed monthly expenses (S-51) and the other expenses in
  * «المصروفات», all in pounds (S-36, S-37).
@@ -17,9 +16,7 @@ const PUBLIC_STATS = {
   FILE_PREFIX:  'إحصاءات أكاديمية سنا',
   TOTALS_TAB:   'الإجمالي',
   MONTHLY_TAB:  'شهرياً',
-  LEGACY_TAB:   'قبل النظام',
   ACADEMY:      'الأكاديمية',
-  SINCE_START:  'منذ التأسيس',
   ACTIVE_DAYS:  30,
   FREEZE_DAY:   5,
   CHILDREN:     'أطفال',
@@ -39,11 +36,6 @@ const PUBLIC_STATS = {
     'المستمرون من الشهر السابق', 'نسبة الاستمرار', 'عدد الحلقات', 'الساعات',
     'الحضور الكلي', 'متوسط الطلاب في الحلقة', 'حلقات الأطفال', 'حلقات الكبار',
     'المعلمون النشطون', 'مصروف الشهر', 'العملة', 'تكلفة ساعة التدريس', 'كفالة الطالب في الشهر',
-  ],
-  // legacy_stats.py (M4) writes exactly these columns (S-29).
-  LEGACY_HEADERS: [
-    'الشهر', 'المعلم', 'عدد الحلقات', 'الساعات', 'الحضور الكلي', 'متوسط الطلاب في الحلقة',
-    'حلقات الأطفال', 'ساعات الأطفال', 'حلقات الكبار', 'ساعات الكبار', 'المعلمون النشطون',
   ],
 };
 
@@ -95,28 +87,7 @@ function _academyStudentId(teacher, s) {
 }
 
 /**
- * One halaqa per (teacher, date, session, number), whatever the number of
- * reports; reports in which nobody was counted are skipped (S-15).
- * @param {Array<Array>} rows - «الحلقات» values.
- * @returns {Array<{teacher: string, date: Date, month: string, category: string, minutes: number, attendance: number}>}
- */
-function collectHalaqat(rows) {
-  const bySlot = {};
-  (rows || []).forEach(r => {
-    const counted = Number(r[7]) || 0;
-    if (!(r[1] instanceof Date) || counted <= 0) return;
-    const slot = `${r[2]}|${_isoDay(r[1])}|${r[3]}|${r[4]}`;
-    if (!bySlot[slot]) {
-      bySlot[slot] = { teacher: String(r[2]), date: r[1], month: _monthOf(r[1]),
-        category: String(r[5]), minutes: Number(r[6]) || 0, attendance: 0 };
-    }
-    bySlot[slot].attendance += counted;
-  });
-  return Object.keys(bySlot).map(k => bySlot[k]);
-}
-
-/**
- * Halaqa columns shared by «الإجمالي», «شهرياً» and «منذ التأسيس».
+ * Halaqa columns shared by «الإجمالي» and «شهرياً».
  * @param {Array<Object>} halaqat
  * @returns {Object}
  */
@@ -236,12 +207,10 @@ function computeTeacherPay(sheetHalaqat, rates) {
  * Computes both public tabs.
  * @param {Object} input
  * @param {Array<{name: string, code: string, students: Array<Object>}>} input.teachers
- * @param {Array<Array>} input.halaqat  - «الحلقات» values.
  * @param {Array<Array>} input.expenses - «المصروفات» values (other expenses).
  * @param {Array<Array>} [input.rates]  - «أسعار الساعة» values.
  * @param {Array<Object>} [input.sheetHalaqat] - From readTeacherSheetHalaqat.
  * @param {Array<Array>} [input.fixed]  - «المصروفات الثابتة» values.
- * @param {Array<Array>} input.legacy   - «قبل النظام» values.
  * @param {Date} input.today
  * @param {Object<string, Array<Array>>} [input.frozenMonthly] - Existing «شهرياً» rows by month.
  * @returns {{ totals: Array<Array>, monthly: Array<Array>, pay: Array<Object> }}
@@ -250,16 +219,15 @@ function computeTeacherPay(sheetHalaqat, rates) {
 function computePublicStats(input) {
   const today = input.today;
   const activeFrom = new Date(today.getFullYear(), today.getMonth(), today.getDate() - PUBLIC_STATS.ACTIVE_DAYS);
-  // From PAY_FROM on, halaqat, hours and attendance are the teachers' own
-  // sheets', from the 1st of the month; before it, the registry's (S-52).
-  // Students stay the registry's: the sheets hold counts, not names.
-  const registryHalaqat = collectHalaqat(input.halaqat);
-  const sheetHalaqat = (input.sheetHalaqat || []).filter(h => h.month >= PUBLIC_STATS.PAY_FROM);
-  const halaqat = registryHalaqat.filter(h => h.month < PUBLIC_STATS.PAY_FROM).concat(sheetHalaqat);
-  const studentsFrom = registryHalaqat.length
-    ? registryHalaqat.map(h => h.date).sort((a, b) => a - b)[0] : null;
+  // Halaqat are the teachers' sheets' (S-53); students the registry's, as the
+  // sheets hold counts, not names. The registry's first day is when students
+  // began to be counted.
+  const halaqat = input.sheetHalaqat || [];
+  const studentDays = [].concat(...input.teachers.map(t => [].concat(...t.students
+    .map(s => Object.keys(s.slots).map(k => k.split('|')[0]))))).sort();
+  const studentsFrom = studentDays.length ? studentDays[0] : '';
   const expenses = readExpenses(input.expenses);
-  const pay = computeTeacherPay(sheetHalaqat, readRates(input.rates));
+  const pay = computeTeacherPay(halaqat, readRates(input.rates));
   const teachers = input.teachers.slice().sort((a, b) => (a.code > b.code ? 1 : -1));
   const codeOf = {};
   teachers.forEach(t => { codeOf[t.name] = t.code; });
@@ -300,29 +268,8 @@ function computePublicStats(input) {
     .concat(studentColumns(academyStudents))
     .concat(halaqaColumns(halaqat))
     .concat([activeTeachers(halaqat.filter(h => h.date >= activeFrom))]));
-  totals.push(_sinceStartRow(halaqat, input.legacy));
 
   return { totals, monthly: _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, studentsFrom, input), pay };
-}
-
-/**
- * «منذ التأسيس» (S-30): halaqat, hours and attendance from «قبل النظام» (its
- * academy rows) plus the halaqat above, with no student count. Legacy months
- * from PAY_FROM on are left out: the sheets cover them from the 1st (S-52).
- * @param {Array<Object>} halaqat
- * @param {Array<Array>} legacyRows
- * @returns {Array}
- */
-function _sinceStartRow(halaqat, legacyRows) {
-  const n = _halaqaNumbers(halaqat);
-  const academy = (legacyRows || []).filter(r => String(r[1]).trim() === PUBLIC_STATS.ACADEMY
-    && (r[0] instanceof Date ? _monthOf(r[0]) : String(r[0]).trim()) < PUBLIC_STATS.PAY_FROM);
-  const sum = i => academy.reduce((a, r) => a + (Number(r[i]) || 0), 0);
-  const count = n.count + sum(2);
-  const attendance = n.attendance + sum(4);
-  return [PUBLIC_STATS.SINCE_START, '', '', '', '',
-    count, _round(n.hours + sum(3)), attendance, count ? _round(attendance / count, 1) : 0,
-    n.kids + sum(6), _round(n.kidsHours + sum(7)), n.adults + sum(8), _round(n.adultsHours + sum(9)), ''];
 }
 
 /**
@@ -334,7 +281,7 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
   const months = Array.from(new Set(halaqat.map(h => h.month).concat(pay.map(p => p.month)))).sort();
   const firstDay = halaqat.length ? halaqat.map(h => h.date).sort((a, b) => a - b)[0] : null;
   // The registry counts students from its first day only, so that month has no sponsorship (S-50).
-  const partialMonth = studentsFrom && studentsFrom.getDate() > 1 ? _monthOf(studentsFrom) : '';
+  const partialMonth = studentsFrom && studentsFrom.slice(8) !== '01' ? studentsFrom.slice(0, 7) : '';
   const fixedItems = readFixedExpenses(input.fixed);
   const fixedTotal = Object.keys(fixedItems).reduce((a, k) => a + fixedItems[k], 0);
   const frozen = input.frozenMonthly || {};
@@ -426,15 +373,8 @@ function refreshPublicStats(year, today) {
 
   const yearFolder = _firstNotTrashed(_findRootFolder().getFoldersByName(sanitizeFilename(y)));
   const ss = _getOrCreatePublicFile(yearFolder, y);
-  const teachers = registryTeacherSheets(registry)
-    .map(sh => ({
-      name:     sh.getName(),
-      code:     _resolveTeacher({ rawTeacherName: sh.getName() }, []).teacherId,
-      students: readStudentsTab(sh).students,
-    }));
-
-  const halaqatRows = _readBody(registry.getSheetByName(REGISTRY.HALAQAT_TAB))
-    .map(r => [r[0], r[1], _teacherTabName(r[2])].concat(r.slice(3)));
+  const sheetHalaqat = readTeacherSheetHalaqat(y);
+  const teachers = academyTeachers(registry, sheetHalaqat);
   const monthlyTab = ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB);
   const frozenMonthly = {};
   _readBody(monthlyTab).forEach(r => {
@@ -444,12 +384,10 @@ function refreshPublicStats(year, today) {
 
   const stats = computePublicStats({
     teachers,
-    halaqat:  halaqatRows,
     expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
     rates:    readRateRows(),
-    sheetHalaqat: readTeacherSheetHalaqat(y),
+    sheetHalaqat,
     fixed:    readFixedRows(),
-    legacy:   _readBody(ss.getSheetByName(PUBLIC_STATS.LEGACY_TAB)),
     today:    now,
     frozenMonthly,
   });
@@ -469,8 +407,28 @@ function refreshPublicStats(year, today) {
 }
 
 /**
+ * The academy's teachers (S-53): every registry tab, and every teacher with a
+ * sheet but no tab yet, who has no students until a report reaches the registry.
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} registry
+ * @param {Array<Object>} sheetHalaqat - From readTeacherSheetHalaqat.
+ * @returns {Array<{name: string, code: string, students: Array<Object>, detailCols: Object}>}
+ */
+function academyTeachers(registry, sheetHalaqat) {
+  const codeOf = name => _resolveTeacher({ rawTeacherName: name }, []).teacherId;
+  const teachers = registryTeacherSheets(registry).map(sh => ({
+    name: sh.getName(), code: codeOf(sh.getName()),
+    students: readStudentsTab(sh).students, detailCols: studentDetailColumns(_headerRow(sh)),
+  }));
+  const known = new Set(teachers.map(t => t.name));
+  Array.from(new Set(sheetHalaqat.map(h => h.teacher))).filter(n => !known.has(n)).forEach(name => {
+    teachers.push({ name, code: codeOf(name), students: [], detailCols: { birthYear: -1, phone: -1 } });
+  });
+  return teachers;
+}
+
+/**
  * The halaqat of every «[teacher] - تقارير الحلقات <year>» under the year
- * folder, from PUBLIC_STATS.PAY_FROM on (S-50, S-52). Opening each
+ * folder, every month (S-50, S-53). Opening each
  * sheet is slow, so the live result is cached for SHEET_HOURS_SECONDS; a test
  * run reads afresh, as its reports change from one step to the next.
  * @param {string} year
@@ -501,7 +459,7 @@ function readTeacherSheetHalaqat(year) {
       SpreadsheetApp.openById(file.getId()).getSheets().forEach(sheet => {
         const m = /^(\d{1,2})\s*-/.exec(sheet.getName());
         const month = m ? `${year}-${m[1].padStart(2, '0')}` : '';
-        if (!month || month < PUBLIC_STATS.PAY_FROM || sheet.getLastRow() < 2) return;
+        if (!month || sheet.getLastRow() < 2) return;
         const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues();
         teacherSheetHalaqat(rows, teacher, month).forEach(h => out.push(h));
       });
@@ -534,9 +492,6 @@ function _getOrCreatePublicFile(yearFolder, year) {
   _styleHeader(monthly, PUBLIC_STATS.MONTHLY_HEADERS);
   // The month stays text, or Sheets turns "2026-10" into a date.
   monthly.getRange('A:A').setNumberFormat('@');
-  const legacy = ss.insertSheet(PUBLIC_STATS.LEGACY_TAB);
-  _styleHeader(legacy, PUBLIC_STATS.LEGACY_HEADERS);
-  legacy.getRange('A:A').setNumberFormat('@');
   return ss;
 }
 
