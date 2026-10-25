@@ -711,20 +711,26 @@ function _testPublicStats() {
     const ac = month('2026-10', 'الأكاديمية');
     _eq(ac.slice(3, 14), [2, 3, 1, 1, 2, 2.5, 4, 2, 1, 1, 2], 'academy month');
     _eq(ac.slice(14), [720, 'EGP', 288, 240], 'expense = pay 220 + other 500; cost per teaching hour; sponsorship');
-    _eq(month('2026-09', 'الأكاديمية').slice(14), [100, 'EGP', 100, 100], 'no other expenses → the pay alone');
+    _eq(month('2026-09', 'الأكاديمية').slice(14), [800, 'EGP', 61.54, ''],
+      'pre-system hours paid too: 1 + 7 hours × 100, ÷ 13 hours, no sponsorship (S-49)');
     _eq(month('2026-10', 'T001').slice(14), ['', '', '', ''], 'no expense or pay on teacher rows');
     const partial = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { rates: [['محمد نبيل', 100]] }));
     const academy = m => partial.monthly.find(r => r[0] === m && r[2] === PUBLIC_STATS.ACADEMY);
     _eq(academy('2026-10').slice(14), ['', '', '', ''], 'a teacher with halaqat and no rate blanks the expense');
-    _eq(academy('2026-09').slice(14, 16), [100, 'EGP'], 'a month whose teachers all have rates stays priced');
+    _eq(academy('2026-09').slice(14, 16), [800, 'EGP'], 'a month whose teachers all have rates stays priced');
 
     _section('المستحقات');
     _eq(out.pay, [
-      { month: '2026-09', teacher: 'محمد نبيل', hours: 1, rate: 100, pay: 100 },
+      { month: '2026-09', teacher: 'محمد نبيل', hours: 8, rate: 100, pay: 800 },
       { month: '2026-10', teacher: 'أسماء علي', hours: 1.5, rate: 80, pay: 120 },
       { month: '2026-10', teacher: 'محمد نبيل', hours: 1, rate: 100, pay: 100 },
     ], 'pay per teacher and month, resubmission and zero-count reports skipped');
     _eq(partial.pay[1].rate + '|' + partial.pay[1].pay, '|', 'no rate → rate and pay blank');
+    const legacyOnly = computeTeacherPay([], { 'رجاء لطفي': 50 },
+      [['2026-09', 'T004', 5, 27, 19], ['2026-09', 'الأكاديمية', 5, 27, 19], ['2026-09', 'T_ab12', 1, 2, 3]],
+      teacherNamesByCode([]));
+    _eq(legacyOnly.map(p => [p.teacher, p.hours, p.pay]), [['T_ab12', 2, ''], ['رجاء لطفي', 27, 1350]],
+      'a pre-system teacher without a tab is named from CONFIG; an unknown code stays a code; the academy row is skipped');
     const odd = computeTeacherPay(collectHalaqat([['x', new Date(2026, 9, 1), 'س', 'صباحية', '1', 'كبار', 50, 3]]), { 'س': 37.5 });
     _eq(odd[0].pay, 31, 'pay rounded to the pound (50 min × 37.5)');
     _eq(readRates([['محمد نبيل', 100], ['x', ''], ['y', -5], ['', 9], ['z', '٤٠']]), { 'محمد نبيل': 100 },
@@ -821,6 +827,11 @@ function _testDashboard() {
       rateLog: [[new Date(2026, 9, 25, 10, 0), 'منى', 'محمد نبيل: 100']] }, input));
     _eq([open.teachers.map(t => t.rate), open.unpriced], [[80, 100], []], 'rates per teacher once unlocked, none missing');
     _eq([open.pay.length, open.rateLog[0].details], [3, 'محمد نبيل: 100'], 'pay rows and rate log sent once unlocked');
+    const withLegacy = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
+      { legacy: input.legacy.concat([['2026-09', 'T004', 5, 27, 19]]) }));
+    _eq(withLegacy.rateTeachers.map(t => t.name), ['أسماء علي', 'رجاء لطفي', 'محمد نبيل'],
+      'rate list includes a pre-system teacher without a registry tab');
+    _eq(d.rateTeachers.map(t => t.rate), ['', ''], 'rate list has no amounts before the pay password');
     const oldLog = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, {
       log: [[new Date(), 'منى', RATE_LOG_ACTION, 'محمد نبيل: 100'], [new Date(), 'منى', 'مصروف', '2026-10: 5']] }));
     _eq(oldLog.log.map(e => e.action), ['مصروف'], 'old rate rows kept out of the shared log');

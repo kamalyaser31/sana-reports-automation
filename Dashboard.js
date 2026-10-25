@@ -69,6 +69,9 @@ function buildDashboardData(input) {
     pay: input.showPay ? stats.pay : null,
     rateLog: input.showPay ? rowsToEditLog((input.rateLog || []).map(r => [r[0], r[1], RATE_LOG_ACTION, r[2]])) : [],
     unpriced: Array.from(new Set(stats.pay.filter(p => p.pay === '').map(p => p.teacher))).sort(),
+    // Teachers with pay may predate the registry (S-49), so the rate list joins both.
+    rateTeachers: Array.from(new Set(input.teachers.map(t => t.name).concat(stats.pay.map(p => p.teacher))))
+      .sort().map(name => ({ name, rate: input.showPay ? (rates[name] || '') : '' })),
     teachers: input.teachers.map(t => ({
       name: t.name,
       rate: input.showPay ? (rates[t.name] || '') : '',

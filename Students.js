@@ -1106,7 +1106,9 @@ function saveTeacherRate(teacher, rate, year) {
   if (!(value > 0)) throw new Error('سعر الساعة رقم أكبر من صفر.');
   _withScriptLock(() => {
     const ss = _registryOrThrow(year);
-    if (!teacher || !ss.getSheetByName(_teacherTabName(teacher))) throw new Error(`لا تبويب للمعلم «${teacher}» في السجل.`);
+    // A teacher from CONFIG may have pay from «قبل النظام» before any registry tab (S-49).
+    const known = Object.keys(CONFIG.TEACHERS).some(k => _teacherTabName(CONFIG.TEACHERS[k].name) === teacher);
+    if (!teacher || !(known || ss.getSheetByName(_teacherTabName(teacher)))) throw new Error(`لا معلم باسم «${teacher}».`);
     const sheet = _getOrCreateRatesFile().getSheetByName(RATES_FILE.RATES_TAB);
     const index = _readBody(sheet).findIndex(r => String(r[0]).trim() === teacher);
     const row = index === -1 ? sheet.getLastRow() + 1 : index + 2;

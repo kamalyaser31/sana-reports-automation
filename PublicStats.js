@@ -149,17 +149,42 @@ function readExpenses(rows) {
 }
 
 /**
- * Each teacher's pay per month (S-35): the month's registry hours times the
- * current rate, rounded to the pound. rate and pay are '' without a rate.
+ * Teacher code → name, from the registry's teachers and CONFIG.TEACHERS, so a
+ * teacher with no registry tab yet still has a name for «قبل النظام».
+ * @param {Array<{name: string, code: string}>} teachers
+ * @returns {Object<string, string>}
+ */
+function teacherNamesByCode(teachers) {
+  const out = {};
+  Object.keys(CONFIG.TEACHERS).forEach(k => { out[CONFIG.TEACHERS[k].id] = _teacherTabName(CONFIG.TEACHERS[k].name); });
+  teachers.forEach(t => { out[t.code] = t.name; });
+  return out;
+}
+
+/**
+ * Each teacher's pay per month (S-35): the month's hours times the current
+ * rate, rounded to the pound. Hours are the registry's, plus the teacher rows
+ * of «قبل النظام» for the days before install (S-49). rate and pay are '' without a rate.
  * @param {Array<Object>} halaqat - From collectHalaqat.
  * @param {Object<string, number>} rates - From readRates.
+ * @param {Array<Array>} [legacyRows] - «قبل النظام» values.
+ * @param {Object<string, string>} [nameOfCode] - From teacherNamesByCode.
  * @returns {Array<{month: string, teacher: string, hours: number, rate: number|string, pay: number|string}>}
  */
-function computeTeacherPay(halaqat, rates) {
+function computeTeacherPay(halaqat, rates, legacyRows, nameOfCode) {
   const byKey = {};
-  halaqat.forEach(h => {
-    const k = `${h.month}|${h.teacher}`;
-    (byKey[k] = byKey[k] || { month: h.month, teacher: h.teacher, minutes: 0 }).minutes += h.minutes;
+  const add = (month, teacher, minutes) => {
+    const k = `${month}|${teacher}`;
+    (byKey[k] = byKey[k] || { month, teacher, minutes: 0 }).minutes += minutes;
+  };
+  halaqat.forEach(h => add(h.month, h.teacher, h.minutes));
+  (legacyRows || []).forEach(r => {
+    const code = String(r[1] || '').trim();
+    const hours = Number(r[3]) || 0;
+    const month = r[0] instanceof Date ? _monthOf(r[0]) : String(r[0] || '').trim();
+    if (code && code !== PUBLIC_STATS.ACADEMY && hours > 0 && /^\d{4}-\d{2}$/.test(month)) {
+      add(month, (nameOfCode || {})[code] || code, hours * 60);
+    }
   });
   return Object.keys(byKey).sort().map(k => {
     const p = byKey[k];
@@ -187,7 +212,7 @@ function computePublicStats(input) {
   const activeFrom = new Date(today.getFullYear(), today.getMonth(), today.getDate() - PUBLIC_STATS.ACTIVE_DAYS);
   const halaqat = collectHalaqat(input.halaqat);
   const expenses = readExpenses(input.expenses);
-  const pay = computeTeacherPay(halaqat, readRates(input.rates));
+  const pay = computeTeacherPay(halaqat, readRates(input.rates), input.legacy, teacherNamesByCode(input.teachers));
   const teachers = input.teachers.slice().sort((a, b) => (a.code > b.code ? 1 : -1));
   const codeOf = {};
   teachers.forEach(t => { codeOf[t.name] = t.code; });
@@ -304,12 +329,18 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
     const monthPay = pay.filter(p => p.month === month);
     const total = monthPay.some(p => p.pay === '') ? ''
       : monthPay.reduce((a, p) => a + p.pay, 0) + (expenses[month] ? expenses[month].amount : 0);
+    // Days before install are in «قبل النظام»: their hours join the divisor, and
+    // the month has no full student count, so no sponsorship (S-49).
+    const legacyHours = (input.legacy || [])
+      .filter(r => String(r[0]).trim() === month && String(r[1]).trim() === PUBLIC_STATS.ACADEMY)
+      .reduce((a, r) => a + (Number(r[3]) || 0), 0);
+    const hours = hp.hours + legacyHours;
     rows.push([month, since, PUBLIC_STATS.ACADEMY].concat(sp.cols).concat(hp.cols).concat([
       new Set(monthHalaqat.map(h => h.teacher)).size,
       total,
       total === '' ? '' : PUBLIC_STATS.CURRENCY,
-      total !== '' && hp.hours ? _round(total / hp.hours) : '',
-      total !== '' && sp.attended ? _round(total / sp.attended) : '',
+      total !== '' && hours ? _round(total / hours) : '',
+      total !== '' && sp.attended && !legacyHours ? _round(total / sp.attended) : '',
     ]));
   });
   return rows;
