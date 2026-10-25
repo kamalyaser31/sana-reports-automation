@@ -1189,6 +1189,12 @@ function sendTelegramNotification(data) {
     `• <b>عدد الطلاب:</b> ${escapeHtml(data.studentCount !== null && data.studentCount !== undefined ? String(data.studentCount) : 'غير محدد')}`,
   ];
 
+  // Says which report of a resent halaqa counts (S-58), so the admin need not open the sheet.
+  if (data.replacedEarlier) {
+    messageLines.push('• <b>إعادة إرسال:</b> يحل محل التقرير السابق لهذه الحلقة، وهذا المحسوب الآن.');
+  } else if (data.isDuplicate) {
+    messageLines.push('• <b>مكرر:</b> لن يُحسب في الساعات.');
+  }
   if (data.newStudents && data.newStudents.length) {
     messageLines.push(`• <b>طلاب جدد:</b> ${escapeHtml(data.newStudents.join('، '))}`);
   }
