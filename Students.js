@@ -1132,7 +1132,7 @@ function saveTeacherRates(list, year) {
   _withScriptLock(() => {
     const ss = _registryOrThrow(year);
     const y = String(year || new Date().getFullYear());
-    const known = new Set(academyTeachers(ss, readTeacherSheetHalaqat(y)).map(t => t.name));
+    const known = new Set(academyTeachers(ss, readTeacherSheetReports(y)).map(t => t.name));
     rows.forEach(([teacher]) => {
       if (!known.has(teacher)) throw new Error(`لا معلم باسم «${teacher}».`);
     });

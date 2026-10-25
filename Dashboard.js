@@ -34,7 +34,7 @@ function _dayOrBlank(value) {
  * @param {Array<Array>} [input.rates] - «أسعار الساعة» values.
  * @param {Array<Array>} [input.log]   - «سجل التعديلات» values.
  * @param {Array<Array>} [input.rateLog] - «سجل الأسعار» values.
- * @param {Array<Object>} [input.sheetHalaqat] - From readTeacherSheetHalaqat.
+ * @param {Array<Object>} [input.sheetReports] - From readTeacherSheetReports.
  * @param {Array<Array>} [input.fixed] - «المصروفات الثابتة» values.
  * @param {boolean} [input.showPay] - Rates and pay leave only for an unlocked session (S-47).
  * @param {Array<Array>} input.aliases - «الأسماء البديلة» values.
@@ -44,7 +44,7 @@ function _dayOrBlank(value) {
 function buildDashboardData(input) {
   const stats = computePublicStats({
     teachers: input.teachers, expenses: input.expenses,
-    rates: input.rates, sheetHalaqat: input.sheetHalaqat, fixed: input.fixed,
+    rates: input.rates, sheetReports: input.sheetReports, fixed: input.fixed,
     today: input.today,
   });
   const fixed = readFixedExpenses(input.fixed);
@@ -92,6 +92,13 @@ function buildDashboardData(input) {
       }),
     })).sort((a, b) => (a.name > b.name ? 1 : -1)),
     log: rowsToEditLog(input.log),
+    // Every row of the teachers' sheets, as they show them (S-55).
+    reports: (input.sheetReports || []).map((r, i) => ({
+      teacher: r.teacher, month: r.month, day: _isoDay(r.date), order: i,
+      date: r.dateText, session: r.session, category: r.category, duration: r.duration,
+      students: r.students, notes: r.notes, minutes: r.minutes, attendance: r.attendance,
+      status: isCountedReport(r) ? '' : (r.duplicate ? 'مكرر' : 'لا يُحسب'),
+    })),
     aliases: rowsToAliases(input.aliases).map(a => ({
       teacher: a.teacher, from: a.from, to: a.to, applied: a.applied,
     })),
@@ -122,10 +129,11 @@ function _friendlyError(error) {
  * Everything the page shows, for one year.
  * @param {string} [year]
  * @param {boolean} [test] - true for the test folder (?test=1).
+ * @param {boolean} [fresh] - Read the teachers' sheets again («حدّث التقارير»).
  * @returns {Object}
  */
-function getDashboardData(year, test) {
-  return _withMode(test, () => _getDashboardData(year));
+function getDashboardData(year, test, fresh) {
+  return _withMode(test, () => _getDashboardData(year, fresh));
 }
 
 /**
@@ -160,21 +168,22 @@ function _withPay(show, fn) {
 
 /**
  * @param {string} [year]
+ * @param {boolean} [fresh]
  * @returns {Object}
  */
-function _getDashboardData(year) {
+function _getDashboardData(year, fresh) {
   try {
     const y = String(year || new Date().getFullYear());
     const registry = _findRegistry(y);
     if (!registry) throw new Error(`لا سجل طلاب لسنة ${y} بعد، أو لم يُشارَك معك مجلد الأكاديمية.`);
-    const sheetHalaqat = readTeacherSheetHalaqat(y);
-    const teachers = academyTeachers(registry, sheetHalaqat);
+    const sheetReports = readTeacherSheetReports(y, fresh === true);
+    const teachers = academyTeachers(registry, sheetReports);
     return buildDashboardData({
       year: y,
       teachers,
       expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
       rates: readRateRows(),
-      sheetHalaqat,
+      sheetReports,
       fixed: readFixedRows(),
       rateLog: _SHOW_PAY ? readRateLogRows() : [],
       showPay: _SHOW_PAY,

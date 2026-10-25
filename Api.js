@@ -31,7 +31,7 @@ const API = {
 };
 
 /** Actions that need a session and write nothing in the registry. */
-const API_SESSION_ACTIONS = ['data', 'unlockPay', 'lockPay'];
+const API_SESSION_ACTIONS = ['data', 'unlockPay', 'lockPay', 'refreshReports'];
 
 /**
  * The log action of a rate change; such rows stay out of the shared edit log.
@@ -171,7 +171,7 @@ function handleApiRequest(request, deps) {
   return _withPay(payOpen, () => {
     let reply;
     if (API_SESSION_ACTIONS.indexOf(request.action) !== -1) {
-      reply = { ok: true, data: getDashboardData(request.year, request.test) };
+      reply = { ok: true, data: getDashboardData(request.year, request.test, request.action === 'refreshReports') };
     } else {
       reply = _runWrite(API_WRITES[request.action], request, session.name, payOpen);
     }

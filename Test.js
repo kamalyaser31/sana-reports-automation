@@ -667,7 +667,7 @@ function _sampleStatsInput(today, extra) {
     expenses: [['2026-10', 500, 'EGP'], ['2026-08', '', 'EGP']],
     rates: [['محمد نبيل', 100], ['أسماء علي', 80]],
     // The halaqat as the teacher sheets hold them (S-53).
-    sheetHalaqat: [
+    sheetReports: [
       { teacher: 'محمد نبيل', date: new Date(2026, 8, 28), month: '2026-09', category: 'أطفال', minutes: 60, attendance: 1 },
       { teacher: 'محمد نبيل', date: new Date(2026, 9, 3), month: '2026-10', category: 'أطفال', minutes: 60, attendance: 2 },
       { teacher: 'أسماء علي', date: new Date(2026, 9, 5), month: '2026-10', category: 'كبار', minutes: 90, attendance: 2 },
@@ -704,7 +704,7 @@ function _testPublicStats() {
       'expense = pay 220 + fixed 200 + other 500; ÷ 2.5 sheet hours; sponsorship over 3 students');
     _eq(month('2026-09', 'الأكاديمية').slice(14), ['', '', '', ''], 'no expense before October 2026 (S-50)');
     const base = _sampleStatsInput(new Date(2026, 9, 20));
-    const listed = computePublicStats(Object.assign(base, { sheetHalaqat: base.sheetHalaqat.concat([
+    const listed = computePublicStats(Object.assign(base, { sheetReports: base.sheetReports.concat([
       { teacher: 'رجاء لطفي', date: new Date(2026, 8, 9), month: '2026-09', category: 'كبار', minutes: 480, attendance: 4 },
       { teacher: 'رجاء لطفي', date: new Date(2026, 9, 9), month: '2026-10', category: 'كبار', minutes: 60, attendance: 4 },
     ]) }));
@@ -713,7 +713,7 @@ function _testPublicStats() {
       'September counts only its listed teachers; October counts everyone (S-54)');
     const sample = _sampleStatsInput(new Date(2026, 9, 20));
     const lateStart = computePublicStats(Object.assign(sample, {
-      sheetHalaqat: sample.sheetHalaqat.slice(1),
+      sheetReports: sample.sheetReports.slice(1),
       teachers: [{ name: 'محمد نبيل', code: 'T001', students: [{ key: 'a', name: 'حمزة علاء',
         gender: STUDENT_GENDER.MALE, slots: { '2026-10-25|صباحية|1': ['أطفال', 0, 0] } }] }] }));
     _eq(lateStart.monthly.find(r => r[2] === PUBLIC_STATS.ACADEMY).slice(14), [920, 'EGP', 368, ''],
@@ -734,16 +734,20 @@ function _testPublicStats() {
     _eq(partial.pay[0].rate + '|' + partial.pay[0].pay, '|', 'no rate → rate and pay blank');
     const odd = computeTeacherPay([{ month: '2026-10', teacher: 'س', minutes: 50 }], { 'س': 37.5 });
     _eq(odd[0].pay, 31, 'pay rounded to the pound (50 min × 37.5)');
-    _eq(teacherSheetHalaqat([
+    _eq(teacherSheetReports([
       ['الاثنين، ١٢ أكتوبر ٢٠٢٦', 'مسائية (حلقة 1)', 'كبار', '1:30', '٣', ''],
       ['02-10-2026', 'صباحية', 'كبار', '0:45', '2', '(تقرير مكرر) أُعيد'],
       ['03-10-2026', 'مسائية', 'أطفال', 0.03125, '1', 'ملاحظة'],
       ['بلا تاريخ', 'مسائية', 'كبار', '0:30', '', ''],
       ['الإجمالي', '', '', '3:00', '6', ''],
       ['المتوسط', '', '', '1:00', '2', ''],
-    ], 'س', '2026-10').map(h => [h.date.getDate(), h.month, h.category, h.minutes, h.attendance]),
-    [[12, '2026-10', 'كبار', 90, 3], [3, '2026-10', 'أطفال', 45, 1], [1, '2026-10', 'كبار', 30, 0]],
-    'sheet halaqat: Arabic and numeric dates, h:mm and day fractions, no summaries or duplicates');
+    ], 'س', '2026-10').map(h => [h.date.getDate(), h.month, h.category, h.minutes, h.attendance, h.duplicate, isCountedReport(h)]),
+    [[12, '2026-10', 'كبار', 90, 3, false, true], [2, '2026-10', 'كبار', 45, 2, true, false],
+      [3, '2026-10', 'أطفال', 45, 1, false, true], [1, '2026-10', 'كبار', 30, 0, false, true]],
+    'sheet reports: Arabic and numeric dates, h:mm and day fractions, no summaries; duplicates kept, not counted');
+    const shown = teacherSheetReports([['الاثنين، ١٢ أكتوبر ٢٠٢٦', 'مسائية (حلقة 1)', 'كبار', '1:30', '٣', 'ملاحظة']], 'س', '2026-10')[0];
+    _eq([shown.dateText, shown.session, shown.duration, shown.students, shown.notes],
+      ['الاثنين، ١٢ أكتوبر ٢٠٢٦', 'مسائية (حلقة 1)', '1:30', '٣', 'ملاحظة'], 'cells kept as the sheet shows them');
     _eq(readFixedExpenses([['الهدايا والتكريمات', 200], ['إدارة الأكاديمية', ''], ['x', 5]]),
       { 'الهدايا والتكريمات': 200 }, 'fixed expenses: known items with an amount only');
     _eq(readRates([['محمد نبيل', 100], ['x', ''], ['y', -5], ['', 9], ['z', '٤٠']]), { 'محمد نبيل': 100 },
@@ -850,6 +854,15 @@ function _testDashboard() {
     _eq(withSheet.teachers.map(t => t.name), ['أسماء علي', 'رجاء لطفي', 'محمد نبيل'],
       'rate list holds every academy teacher, one without students too');
     _eq(withSheet.teachers[1].rate, '', 'a teacher without a rate has none');
+    const withReports = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, { sheetReports: input.sheetReports.concat([
+      Object.assign({}, input.sheetReports[1], { duplicate: true, notes: '(تقرير مكرر)' }),
+      { teacher: 'رجاء لطفي', date: new Date(2026, 8, 9), month: '2026-09', category: 'كبار', minutes: 480, attendance: 4 },
+    ]) }));
+    _eq(withReports.reports.map(r => [r.teacher, r.day, r.status]), [
+      ['محمد نبيل', '2026-09-28', ''], ['محمد نبيل', '2026-10-03', ''], ['أسماء علي', '2026-10-05', ''],
+      ['محمد نبيل', '2026-10-03', 'مكرر'], ['رجاء لطفي', '2026-09-09', 'لا يُحسب'],
+    ], 'every sheet row sent in order, a duplicate and an excluded month named (S-55)');
+    _ok(!_hasDate(withReports.reports), 'report rows hold no Date');
     const noRate = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
       { rates: [['محمد نبيل', 100]] }));
     _eq([noRate.teachers[0].rate, noRate.unpriced], ['', ['أسماء علي']], 'teacher without a rate named');
@@ -1216,9 +1229,9 @@ function integrationTest_PublicStats() {
     _ok(refused !== '', 'malformed month refused');
     // 60 pounds an hour makes each teacher's pay their minutes, to check the sum.
     // Pay follows the teacher sheets (S-50), whose teachers may have no registry tab.
-    const sheetHalaqat = readTeacherSheetHalaqat('2026').filter(h => h.month === '2026-10');
+    const sheetReports = readTeacherSheetReports('2026').filter(h => h.month === '2026-10');
     const teachers = Array.from(new Set(registryTeacherSheets(_findRegistry('2026')).map(sh => sh.getName())
-      .concat(sheetHalaqat.map(h => h.teacher))));
+      .concat(sheetReports.map(h => h.teacher))));
     const oldTab = () => _findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB);
     const registryRatesBefore = oldTab() ? JSON.stringify(_readBody(oldTab())) : '';
     saveTeacherRates([{ teacher: teachers[0], rate: '٧٠' }]);
@@ -1254,9 +1267,9 @@ function integrationTest_PublicStats() {
     const oct = _readBody(ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB))
       .find(r => String(r[0]) === '2026-10' && r[2] === PUBLIC_STATS.ACADEMY);
     const fixedTotal = Object.keys(fixed).reduce((a, k) => a + fixed[k], 0);
-    const pay = computeTeacherPay(sheetHalaqat, readRates(readRateRows())).reduce((a, p) => a + p.pay, 0);
-    _ok(sheetHalaqat.length > 0, 'teacher sheet halaqat read for October');
-    const octHours = _round(sheetHalaqat.reduce((a, h) => a + h.minutes, 0) / 60);
+    const pay = computeTeacherPay(sheetReports, readRates(readRateRows())).reduce((a, p) => a + p.pay, 0);
+    _ok(sheetReports.length > 0, 'teacher sheet halaqat read for October');
+    const octHours = _round(sheetReports.reduce((a, h) => a + h.minutes, 0) / 60);
     _eq([oct[14], oct[15]], [450 + fixedTotal + pay, 'EGP'], 'expense = sheet pay + fixed + other, updated in place');
     _eq(oct[8], octHours, 'October hours in the public file are the sheets\' hours (S-52)');
     const expenses = readExpenseMonths(_readBody(_findRegistry('2026').getSheetByName(REGISTRY.EXPENSES_TAB)));
@@ -1411,6 +1424,8 @@ function integrationTest_Api() {
   call('setGender', { teacher, key: studentNameKey(`منير ${tag}`), gender: STUDENT_GENDER.MALE, label: `منير ${tag}` }, login.token);
   _eq(call('data', {}, login.token).data.log[0].name, `مختبر ${tag}`, 'other writes logged in the registry');
   _eq(call('lockPay', {}, login.token).data.pay, null, 'lock hides pay again');
+  const refreshed = call('refreshReports', {}, login.token).data;
+  _ok(Array.isArray(refreshed.reports) && refreshed.reports.length > 0, 'refresh reads the teachers\' sheets again');
 
   const reply = JSON.parse(doPost({ postData: { contents: '{' } }).getContent());
   _eq([reply.ok, reply.error], [false, 'طلب غير مفهوم.'], 'doPost answers a bad body with JSON');

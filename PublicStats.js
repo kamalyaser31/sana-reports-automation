@@ -130,31 +130,45 @@ function readExpenses(rows) {
 }
 
 /**
- * The halaqat of one monthly tab of a teacher's sheet (S-50, S-52), from its
- * display values below the header: one per row, except the two summary rows
- * and the rows marked «(تقرير مكرر)». Minutes are «مدة الحصة» (column D,
- * "h:mm"), attendance «عدد الطلاب» (column E).
+ * The reports of one monthly tab of a teacher's sheet (S-50, S-55), from its
+ * display values below the header, in the sheet's order: one per row except
+ * the two summary rows. A row marked «(تقرير مكرر)» is kept with duplicate set.
+ * Minutes are «مدة الحصة» (column D, "h:mm"), attendance «عدد الطلاب» (column E).
  * @param {Array<Array>} rows
  * @param {string} teacher - Teacher tab name.
  * @param {string} month - "yyyy-mm" of the tab.
- * @returns {Array<{teacher: string, date: Date, month: string, category: string, minutes: number, attendance: number}>}
+ * @returns {Array<Object>} teacher, date, month, category, minutes, attendance,
+ *   duplicate, and the cells as shown: dateText, session, duration, students, notes.
  */
-function teacherSheetHalaqat(rows, teacher, month) {
+function teacherSheetReports(rows, teacher, month) {
   const summary = new Set(['الإجمالي', 'المتوسط']);
   const [y, m] = month.split('-').map(Number);
+  const text = v => String(v === undefined || v === null ? '' : v).trim();
   const out = [];
   (rows || []).forEach(r => {
-    if (summary.has(String(r[0]).trim()) || String(r[5] || '').trim().indexOf('(تقرير مكرر)') === 0) return;
-    const d = String(r[3] === undefined ? '' : r[3]).trim();
+    if (summary.has(text(r[0])) || r.slice(0, 6).every(v => text(v) === '')) return;
+    const d = text(r[3]);
     const hm = /^(\d+):(\d{1,2})/.exec(d);
     // A plain number is a day fraction, as Sheets stores a duration.
     const minutes = hm ? Number(hm[1]) * 60 + Number(hm[2]) : Math.round((Number(d) || 0) * 1440);
-    if (!(minutes > 0)) return;
     out.push({ teacher, date: new Date(y, m - 1, _sheetDay(r[0])), month,
-      category: String(r[2] || '').trim(), minutes,
-      attendance: Number(normalizeDigitsAndText(String(r[4] || '')).trim()) || 0 });
+      category: text(r[2]), minutes,
+      attendance: Number(normalizeDigitsAndText(text(r[4]))) || 0,
+      duplicate: text(r[5]).indexOf('(تقرير مكرر)') === 0,
+      dateText: text(r[0]), session: text(r[1]), duration: d, students: text(r[4]), notes: text(r[5]) });
   });
   return out;
+}
+
+/**
+ * Whether a report counts in the numbers and the pay: not a duplicate, with a
+ * duration, and by a teacher the month allows (S-54).
+ * @param {Object} r - From teacherSheetReports.
+ * @returns {boolean}
+ */
+function isCountedReport(r) {
+  const only = PUBLIC_STATS.MONTH_TEACHERS[r.month];
+  return !r.duplicate && r.minutes > 0 && (!only || only.indexOf(r.teacher) !== -1);
 }
 
 /**
@@ -189,13 +203,13 @@ function readFixedExpenses(rows) {
  * Each teacher's pay per month (S-35): the month's hours in the teacher's own
  * sheet (S-50) times the current rate, rounded to the pound. rate and pay are
  * '' without a rate.
- * @param {Array<{month: string, teacher: string, minutes: number}>} sheetHalaqat - From readTeacherSheetHalaqat.
+ * @param {Array<{month: string, teacher: string, minutes: number}>} sheetReports - From readTeacherSheetReports.
  * @param {Object<string, number>} rates - From readRates.
  * @returns {Array<{month: string, teacher: string, hours: number, rate: number|string, pay: number|string}>}
  */
-function computeTeacherPay(sheetHalaqat, rates) {
+function computeTeacherPay(sheetReports, rates) {
   const byKey = {};
-  (sheetHalaqat || []).forEach(h => {
+  (sheetReports || []).forEach(h => {
     if (!(h.month >= PUBLIC_STATS.PAY_FROM) || !(h.minutes > 0)) return;
     const k = `${h.month}|${h.teacher}`;
     (byKey[k] = byKey[k] || { month: h.month, teacher: h.teacher, minutes: 0 }).minutes += h.minutes;
@@ -214,7 +228,7 @@ function computeTeacherPay(sheetHalaqat, rates) {
  * @param {Array<{name: string, code: string, students: Array<Object>}>} input.teachers
  * @param {Array<Array>} input.expenses - «المصروفات» values (other expenses).
  * @param {Array<Array>} [input.rates]  - «أسعار الساعة» values.
- * @param {Array<Object>} [input.sheetHalaqat] - From readTeacherSheetHalaqat.
+ * @param {Array<Object>} [input.sheetReports] - From readTeacherSheetReports.
  * @param {Array<Array>} [input.fixed]  - «المصروفات الثابتة» values.
  * @param {Date} input.today
  * @param {Object<string, Array<Array>>} [input.frozenMonthly] - Existing «شهرياً» rows by month.
@@ -227,10 +241,7 @@ function computePublicStats(input) {
   // Halaqat are the teachers' sheets' (S-53); students the registry's, as the
   // sheets hold counts, not names. The registry's first day is when students
   // began to be counted.
-  const halaqat = (input.sheetHalaqat || []).filter(h => {
-    const only = PUBLIC_STATS.MONTH_TEACHERS[h.month];
-    return !only || only.indexOf(h.teacher) !== -1;
-  });
+  const halaqat = (input.sheetReports || []).filter(isCountedReport);
   const studentDays = [].concat(...input.teachers.map(t => [].concat(...t.students
     .map(s => Object.keys(s.slots).map(k => k.split('|')[0]))))).sort();
   const studentsFrom = studentDays.length ? studentDays[0] : '';
@@ -381,8 +392,8 @@ function refreshPublicStats(year, today) {
 
   const yearFolder = _firstNotTrashed(_findRootFolder().getFoldersByName(sanitizeFilename(y)));
   const ss = _getOrCreatePublicFile(yearFolder, y);
-  const sheetHalaqat = readTeacherSheetHalaqat(y);
-  const teachers = academyTeachers(registry, sheetHalaqat);
+  const sheetReports = readTeacherSheetReports(y);
+  const teachers = academyTeachers(registry, sheetReports);
   const monthlyTab = ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB);
   const frozenMonthly = {};
   _readBody(monthlyTab).forEach(r => {
@@ -394,7 +405,7 @@ function refreshPublicStats(year, today) {
     teachers,
     expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
     rates:    readRateRows(),
-    sheetHalaqat,
+    sheetReports,
     fixed:    readFixedRows(),
     today:    now,
     frozenMonthly,
@@ -418,36 +429,37 @@ function refreshPublicStats(year, today) {
  * The academy's teachers (S-53): every registry tab, and every teacher with a
  * sheet but no tab yet, who has no students until a report reaches the registry.
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} registry
- * @param {Array<Object>} sheetHalaqat - From readTeacherSheetHalaqat.
+ * @param {Array<Object>} sheetReports - From readTeacherSheetReports.
  * @returns {Array<{name: string, code: string, students: Array<Object>, detailCols: Object}>}
  */
-function academyTeachers(registry, sheetHalaqat) {
+function academyTeachers(registry, sheetReports) {
   const codeOf = name => _resolveTeacher({ rawTeacherName: name }, []).teacherId;
   const teachers = registryTeacherSheets(registry).map(sh => ({
     name: sh.getName(), code: codeOf(sh.getName()),
     students: readStudentsTab(sh).students, detailCols: studentDetailColumns(_headerRow(sh)),
   }));
   const known = new Set(teachers.map(t => t.name));
-  Array.from(new Set(sheetHalaqat.map(h => h.teacher))).filter(n => !known.has(n)).forEach(name => {
+  Array.from(new Set(sheetReports.map(h => h.teacher))).filter(n => !known.has(n)).forEach(name => {
     teachers.push({ name, code: codeOf(name), students: [], detailCols: { birthYear: -1, phone: -1 } });
   });
   return teachers;
 }
 
 /**
- * The halaqat of every «[teacher] - تقارير الحلقات <year>» under the year
+ * The reports of every «[teacher] - تقارير الحلقات <year>» under the year
  * folder, every month (S-50, S-53). Opening each
  * sheet is slow, so the live result is cached for SHEET_HOURS_SECONDS; a test
  * run reads afresh, as its reports change from one step to the next.
  * @param {string} year
- * @returns {Array<Object>} As teacherSheetHalaqat.
+ * @param {boolean} [fresh] - Read the sheets even when cached («حدّث التقارير»).
+ * @returns {Array<Object>} As teacherSheetReports.
  */
-function readTeacherSheetHalaqat(year) {
+function readTeacherSheetReports(year, fresh) {
   const cache = CacheService.getScriptCache();
-  const key = `sheet_halaqat_${year}`;
-  const hit = _TEST_MODE ? null : cache.get(key);
+  const key = `sheet_reports_${year}`;
+  const hit = _TEST_MODE || fresh ? null : _cacheGetJson(cache, key);
   // JSON turns each Date into text; it is made a Date again.
-  if (hit) return JSON.parse(hit).map(h => Object.assign(h, { date: new Date(h.date) }));
+  if (hit) return hit.map(h => Object.assign(h, { date: new Date(h.date) }));
 
   const root = _findRootFolder();
   const yearFolder = root && _firstNotTrashed(root.getFoldersByName(sanitizeFilename(year)));
@@ -469,12 +481,37 @@ function readTeacherSheetHalaqat(year) {
         const month = m ? `${year}-${m[1].padStart(2, '0')}` : '';
         if (!month || sheet.getLastRow() < 2) return;
         const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues();
-        teacherSheetHalaqat(rows, teacher, month).forEach(h => out.push(h));
+        teacherSheetReports(rows, teacher, month).forEach(h => out.push(h));
       });
     }
   }
-  if (!_TEST_MODE) cache.put(key, JSON.stringify(out), PUBLIC_STATS.SHEET_HOURS_SECONDS);
+  if (!_TEST_MODE) _cachePutJson(cache, key, out, PUBLIC_STATS.SHEET_HOURS_SECONDS);
   return out;
+}
+
+/**
+ * A cache value holds at most 100 KB, and a year of reports with their notes is
+ * more, so the JSON is kept in parts. Arabic takes two bytes a letter.
+ */
+const CACHE_PART_CHARS = 40000;
+
+/** @returns {*} The value put by _cachePutJson, or null if any part has gone. */
+function _cacheGetJson(cache, key) {
+  const n = Number(cache.get(`${key}_n`));
+  if (!n) return null;
+  const keys = Array.from({ length: n }, (_, i) => `${key}_${i}`);
+  const parts = cache.getAll(keys);
+  if (keys.some(k => parts[k] === undefined || parts[k] === null)) return null;
+  return JSON.parse(keys.map(k => parts[k]).join(''));
+}
+
+function _cachePutJson(cache, key, value, seconds) {
+  const json = JSON.stringify(value);
+  const parts = {};
+  let n = 0;
+  for (let i = 0; i < json.length; i += CACHE_PART_CHARS) parts[`${key}_${n++}`] = json.slice(i, i + CACHE_PART_CHARS);
+  parts[`${key}_n`] = String(n);
+  try { cache.putAll(parts, seconds); } catch (e) { console.warn('[CACHE] reports not cached:', e.message); }
 }
 
 /**
