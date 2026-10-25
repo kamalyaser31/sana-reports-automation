@@ -1194,11 +1194,12 @@ function integrationTest_PublicStats() {
     _ok(refused !== '', 'malformed month refused');
     // 60 pounds an hour makes each teacher's pay their minutes, to check the sum.
     const teachers = registryTeacherSheets(_findRegistry('2026')).map(sh => sh.getName());
+    const oldTab = () => _findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB);
+    const registryRatesBefore = oldTab() ? JSON.stringify(_readBody(oldTab())) : '';
     saveTeacherRate(teachers[0], '٧٠');
     teachers.forEach(t => saveTeacherRate(t, 60));
     const rates = readRateRows();
-    _isNull(_findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB) && _readBody(
-      _findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB)).some(r => r[1] === 60) ? 'in registry' : null,
+    _eq(oldTab() ? JSON.stringify(_readBody(oldTab())) : '', registryRatesBefore,
       'rates not written to the shared registry');
     _eq(rates.filter(r => r[0] === teachers[0]).map(r => r[1]), [60], 'rate updated in place, eastern digits read');
     refused = '';

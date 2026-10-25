@@ -786,12 +786,14 @@ function _findRatesFile() {
 function _getOrCreateRatesFile() {
   const existing = _findRatesFile();
   if (existing) return existing;
+  // A new spreadsheet is born in My Drive root, which is the live home already;
+  // the tabs come first, so a failed move never leaves a half-built file.
   const ss = SpreadsheetApp.create(RATES_FILE.NAME);
-  DriveApp.getFileById(ss.getId()).moveTo(_ratesFolder());
   const first = ss.getSheets()[0];
   first.setName(RATES_FILE.RATES_TAB);
   _styleHeader(first, RATES_FILE.HEADERS);
   _styleHeader(ss.insertSheet(RATES_FILE.LOG_TAB), RATES_FILE.LOG_HEADERS);
+  if (_TEST_MODE) DriveApp.getFileById(ss.getId()).moveTo(_ratesFolder());
   return ss;
 }
 
