@@ -711,6 +711,8 @@ function _testPublicStats() {
     const academyOf = (stats, m) => stats.monthly.find(r => r[0] === m && r[2] === PUBLIC_STATS.ACADEMY);
     _eq([academyOf(listed, '2026-09')[7], academyOf(listed, '2026-10')[7]], [1, 3],
       'September counts only its listed teachers; October counts everyone (S-54)');
+    _ok(!isCountedReport({ teacher: CONFIG.FALLBACKS.TEACHER_NAME, month: '2026-10', minutes: 60, duplicate: false }),
+      'a report without a teacher\'s name is not counted (S-57)');
     const sample = _sampleStatsInput(new Date(2026, 9, 20));
     const lateStart = computePublicStats(Object.assign(sample, {
       sheetReports: sample.sheetReports.slice(1),

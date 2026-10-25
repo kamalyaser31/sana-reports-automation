@@ -160,15 +160,19 @@ function teacherSheetReports(rows, teacher, month) {
   return out;
 }
 
+/** The sheet a report without a teacher's name is written to (CONFIG.FALLBACKS). */
+const UNNAMED_TEACHER = () => _teacherTabName(CONFIG.FALLBACKS.TEACHER_NAME);
+
 /**
  * Whether a report counts in the numbers and the pay: not a duplicate, with a
- * duration, and by a teacher the month allows (S-54).
+ * duration, by a named teacher (S-57), and one the month allows (S-54).
  * @param {Object} r - From teacherSheetReports.
  * @returns {boolean}
  */
 function isCountedReport(r) {
   const only = PUBLIC_STATS.MONTH_TEACHERS[r.month];
-  return !r.duplicate && r.minutes > 0 && (!only || only.indexOf(r.teacher) !== -1);
+  return !r.duplicate && r.minutes > 0 && r.teacher !== UNNAMED_TEACHER()
+    && (!only || only.indexOf(r.teacher) !== -1);
 }
 
 /**
@@ -178,10 +182,9 @@ function isCountedReport(r) {
  * @returns {number}
  */
 function _sheetDay(text) {
-  const s = normalizeDigitsAndText(String(text || ''));
-  const m = /(\d{1,2})[-/.]\d{1,2}[-/.]\d{4}/.exec(s) || /(\d{1,2})\s+[^\d\s]+\s+\d{4}/.exec(s);
-  const day = m ? Number(m[1]) : 1;
-  return day >= 1 && day <= 31 ? day : 1;
+  // The pipeline's own reader, so the sheet and the report folders agree on a date.
+  const date = _parseReportDate(String(text || ''));
+  return date ? date.getDate() : 1;
 }
 
 /**
@@ -439,7 +442,9 @@ function academyTeachers(registry, sheetReports) {
     students: readStudentsTab(sh).students, detailCols: studentDetailColumns(_headerRow(sh)),
   }));
   const known = new Set(teachers.map(t => t.name));
-  Array.from(new Set(sheetReports.map(h => h.teacher))).filter(n => !known.has(n)).forEach(name => {
+  // A report without a teacher's name has no teacher to list or to pay (S-57).
+  Array.from(new Set(sheetReports.map(h => h.teacher)))
+    .filter(n => !known.has(n) && n !== UNNAMED_TEACHER()).forEach(name => {
     teachers.push({ name, code: codeOf(name), students: [], detailCols: { birthYear: -1, phone: -1 } });
   });
   return teachers;

@@ -34,7 +34,11 @@ function authorizeAndTest() {
       'ملاحظات خاصة للإدارة': 'تفويض صلاحيات Google Sheets.',
     },
   };
-  onFormSubmit(mockEvent);
+  // The test folder, not the live one: the teachers' sheets are the source of
+  // the halaqat and the pay, so a sample report must never reach them.
+  _TEST_MODE = true;
+  try { onFormSubmit(mockEvent); }
+  finally { _TEST_MODE = false; }
   console.log('Authorization and self-test completed successfully!');
 }
 
@@ -62,7 +66,7 @@ function testTelegramConnection() {
 
   sendTelegramNotification({
     teacherName:       'محمد نبيل (اختبار)',
-    sessionTypeName:   'صباحية',
+    sessionType:       'صباحية',
     reportDateText:    '29-08-2026',
     durationFormatted: '1 ساعة',
     durationTime:      '01:00',
