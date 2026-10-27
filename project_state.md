@@ -41,7 +41,7 @@
 2. **عزل الأعطال:** فشل Google Sheets أو إشعار Telegram لا يُعطّل حفظ ملف Markdown التوثيقي الأصلي في Google Drive، وتُسجّل الأخطاء في ملف شهري بـ Drive.
 3. **نقاء الدوال ومبدأ CQS:** عدم تعديل كائنات المدخلات داخل الدوال الفرعية (مثل `saveMarkdownFile`).
 4. **جودة الشفرة والـ ES6+:** استخدام `const`/`let` حصراً، وتجريد الدوال الوسيطة (`_resolveTeacher`, `_parseDuration`, `_resolveSessionAndDate`, `_formatSubmissionDate`).
-5. **منظومة الاختبارات:** تشغيل `runAllUnitTests` للاختبار السريع المستقل عن Drive، و`runAllTests` للاختبار التكاملي الكامل.
+5. **منظومة الاختبارات:** تشغيل `runAllUnitTests` للاختبار السريع المستقل عن Drive، و`runAllTests` للاختبار التكاملي الكامل (صار يتجاوز حد الست دقائق في المحرر)، و`runLiveFixChecks` لفحص F-04 وF-07 وF-08 حياً في مجلد الاختبار (نجح 17/17 في النسخة 30).
 
 ---
 
