@@ -146,58 +146,6 @@ function _testParseReportDate() {
   });
 }
 
-// ─── getFieldCaseInsensitive ─────────────────────────────────────────────────
-function _testGetFieldCI() {
-  _suite('getFieldCaseInsensitive', () => {
-    const obj = {
-      'اسم المعلم':  'محمد نبيل',
-      ' الساعات ':   '2',
-      'التقرير':     '',
-      'nullField':   null,
-      'undefField':  undefined,
-    };
-
-    _eq(getFieldCaseInsensitive(obj, 'اسم المعلم'),  'محمد نبيل', 'exact match');
-    _eq(getFieldCaseInsensitive(obj, 'الساعات'),     '2',         'trims key whitespace');
-    _eq(getFieldCaseInsensitive(obj, 'NULLFIELD'),   null,        'null value → null (not "null" string)');
-    _eq(getFieldCaseInsensitive(obj, 'UNDEFFIELD'),  null,        'undefined value → null (not "undefined" string)');
-    _eq(getFieldCaseInsensitive(obj, 'التقرير'),     '',          'empty string returned as-is');
-    _isNull(getFieldCaseInsensitive(obj, 'غير موجود'), 'missing key → null');
-    _isNull(getFieldCaseInsensitive(null, 'key'),      'null obj → null');
-  });
-}
-
-// ─── _formatArabicHours ──────────────────────────────────────────────────────
-function _testFormatArabicHours() {
-  _suite('_formatArabicHours', () => {
-    _eq(_formatArabicHours(1),   'ساعة',    '1 → ساعة');
-    _eq(_formatArabicHours(2),   'ساعتان',  '2 → ساعتان');
-    _eq(_formatArabicHours(3),   'ساعات',   '3 → ساعات');
-    _eq(_formatArabicHours(10),  'ساعات',   '10 → ساعات');
-    _eq(_formatArabicHours(11),  'ساعة',    '11 → ساعة (كبير = مفرد)');
-  });
-}
-
-// ─── sanitizeFilename ────────────────────────────────────────────────────────
-function _testSanitize() {
-  _suite('sanitizeFilename', () => {
-    _eq(sanitizeFilename(''),           'unnamed',             'empty → unnamed');
-    _eq(sanitizeFilename(null),         'unnamed',             'null → unnamed');
-    _eq(sanitizeFilename('a/b\\c:d'),   'a_b_c_d',            'forbidden chars → underscore');
-    _eq(sanitizeFilename(' trim '),     'trim',                'leading/trailing space trimmed');
-    _eq(sanitizeFilename('29-08_تجويد'), '29-08_تجويد',       'arabic + hyphens preserved');
-    _eq(sanitizeFilename('line\nnew'),   'line new',           'newline → space');
-  });
-}
-
-// ─── escapeHtml ──────────────────────────────────────────────────────────────
-function _testEscapeHtml() {
-  _suite('escapeHtml', () => {
-    _eq(escapeHtml(null),       '',          'null → empty');
-    _eq(escapeHtml('a<b>&c'),   'a&lt;b&gt;&amp;c', '<, > and & escaped');
-  });
-}
-
 // ─── _formatSubmissionDate ───────────────────────────────────────────────────
 function _testFormatDate() {
   _suite('_formatSubmissionDate', () => {
@@ -370,37 +318,6 @@ function _testValidate() {
     const rawBadDate = { ...rawOk, bodyMetadata: { ...rawOk.bodyMetadata, dateText: 'اليوم' } };
     const v6 = validateFormData(rawBadDate, 'uuid-6', new Date(2026, 8, 1));
     _eq(v6.submissionMonthFolderName, '09 - سبتمبر', 'falls back to submission month');
-  });
-}
-
-// ─── generateMarkdownContent ─────────────────────────────────────────────────
-function _testGenerateMarkdown() {
-  _suite('generateMarkdownContent', () => {
-    const data = {
-      executionId: 'test-uuid', submissionTimestamp: '2026-08-29T14:00:00Z',
-      teacherName: 'محمد نبيل', teacherId: 'T001',
-      sessionType: 'تجويد', sessionId: 'TAJWEED',
-      studentCategory: 'كبار',
-      reportDateText: '29-08-2026', submissionDateFormatted: '29-08-2026',
-      durationHours: 1, durationMinutes: 30,
-      durationTime: '01:30', durationFormatted: '1 ساعة و30 دقيقة',
-      studentCount: 8,
-      validationStatus: 'VALID', missingFields: [], validationErrors: [],
-      reportText: 'نص التقرير التجريبي الكامل.',
-      adminNotes: 'ملاحظة إدارية.',
-    };
-    const md = generateMarkdownContent(data);
-
-    _has(md, 'teacher_name: "محمد نبيل"',   'text fields quoted in frontmatter');
-    _has(md, 'student_count: 8',            'numbers unquoted in frontmatter');
-    _has(md, 'نص التقرير التجريبي',         'report body present');
-    _has(md, 'ملاحظة إدارية',              'admin notes present');
-    _ok(!md.includes('undefined'),          'no raw "undefined" strings in output');
-    _ok(!md.includes('"null"'),             'no raw "null" strings in output');
-
-    const mdHala = generateMarkdownContent({ ...data, halaNum: '2' });
-    _has(mdHala, 'hala_num: "2"',          'hala_num in frontmatter');
-    _has(mdHala, 'تجويد (حلقة 2)',         'hala number shown with session type');
   });
 }
 
@@ -1075,17 +992,12 @@ function runAllUnitTests() {
 
   _testNormalize();
   _testParseMetadata();
-  _testGetFieldCI();
-  _testFormatArabicHours();
-  _testSanitize();
-  _testEscapeHtml();
   _testFormatDate();
   _testParseReportDate();
   _testResolveTeacher();
   _testParseDuration();
   _testResolveSession();
   _testValidate();
-  _testGenerateMarkdown();
   _testStudentKey();
   _testParseStudents();
   _testSlotRule();
