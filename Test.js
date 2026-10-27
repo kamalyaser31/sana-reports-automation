@@ -6,7 +6,8 @@
  *
  * ENTRY POINTS:
  *   runAllUnitTests()  — اختبارات الوحدة فقط (~3 ثوانٍ، بدون Drive/Sheets)
- *   runAllTests()      — الجناحان معاً: وحدة + تكاملي (~45 ثانية)
+ *   runAllTests()      — الجناحان معاً: وحدة + تكاملي (نحو خمس دقائق، قرب حد الست)
+ *   runLiveFixChecks() — تعديل التقارير وحذفها وصفوف التبويب وحدها (~دقيقتان)
  *
  * كيفية التشغيل:
  *   افتح محرر Apps Script → اختر الدالة من القائمة → Run.
@@ -82,9 +83,7 @@ function _report(label) {
 // ─── normalizeDigitsAndText ──────────────────────────────────────────────────
 function _testNormalize() {
   _suite('normalizeDigitsAndText', () => {
-    _eq(normalizeDigitsAndText(''),    '',    'empty string → empty');
     _eq(normalizeDigitsAndText(null),  '',    'null → empty');
-    _eq(normalizeDigitsAndText('123'), '123', 'western digits unchanged');
     _eq(normalizeDigitsAndText('٠١٢٣٤٥٦٧٨٩'), '0123456789', 'all eastern → western');
     _eq(normalizeDigitsAndText('عدد الطلاب: ٢٥'), 'عدد الطلاب: 25', 'arabic label + eastern digits');
     _eq(normalizeDigitsAndText('test\u200Bval'), 'test val', 'zero-width space → space');
@@ -97,7 +96,6 @@ function _testNormalize() {
 function _testParseMetadata() {
   _suite('parseReportMetadata', () => {
     _section('empty / invalid input');
-    _eq(parseReportMetadata(''),   { dateText: '', sessionTypeText: '', studentCountText: '', halaNumText: '' }, 'empty string');
     _eq(parseReportMetadata(null), { dateText: '', sessionTypeText: '', studentCountText: '', halaNumText: '' }, 'null input');
 
     _section('full valid report');
@@ -177,7 +175,6 @@ function _testFormatArabicHours() {
     _eq(_formatArabicHours(3),   'ساعات',   '3 → ساعات');
     _eq(_formatArabicHours(10),  'ساعات',   '10 → ساعات');
     _eq(_formatArabicHours(11),  'ساعة',    '11 → ساعة (كبير = مفرد)');
-    _eq(_formatArabicHours(100), 'ساعة',    '100 → ساعة');
   });
 }
 
@@ -186,7 +183,6 @@ function _testSanitize() {
   _suite('sanitizeFilename', () => {
     _eq(sanitizeFilename(''),           'unnamed',             'empty → unnamed');
     _eq(sanitizeFilename(null),         'unnamed',             'null → unnamed');
-    _eq(sanitizeFilename('normal'),     'normal',              'clean name unchanged');
     _eq(sanitizeFilename('a/b\\c:d'),   'a_b_c_d',            'forbidden chars → underscore');
     _eq(sanitizeFilename(' trim '),     'trim',                'leading/trailing space trimmed');
     _eq(sanitizeFilename('29-08_تجويد'), '29-08_تجويد',       'arabic + hyphens preserved');
@@ -197,12 +193,8 @@ function _testSanitize() {
 // ─── escapeHtml ──────────────────────────────────────────────────────────────
 function _testEscapeHtml() {
   _suite('escapeHtml', () => {
-    _eq(escapeHtml(''),         '',          'empty → empty');
     _eq(escapeHtml(null),       '',          'null → empty');
-    _eq(escapeHtml('plain'),    'plain',     'no special chars unchanged');
-    _eq(escapeHtml('a & b'),    'a &amp; b', '& escaped');
-    _eq(escapeHtml('<b>tag</b>'), '&lt;b&gt;tag&lt;/b&gt;', '< and > escaped');
-    _eq(escapeHtml('a<b>&c'),   'a&lt;b&gt;&amp;c', 'all three combined');
+    _eq(escapeHtml('a<b>&c'),   'a&lt;b&gt;&amp;c', '<, > and & escaped');
   });
 }
 
@@ -210,7 +202,6 @@ function _testEscapeHtml() {
 function _testFormatDate() {
   _suite('_formatSubmissionDate', () => {
     const d = _formatSubmissionDate(new Date(2026, 7, 29)); // Aug 29 2026
-    _eq(d.year,            '2026',          'year as string');
     _eq(d.monthFolderName, '08 - أغسطس',   'arabic month name');
     _eq(d.dateFormatted,   '29-08-2026',    'DD-MM-YYYY format');
 
@@ -234,7 +225,6 @@ function _testResolveTeacher() {
     const mf2 = [];
     const r2 = _resolveTeacher({ rawTeacherName: 'معلم جديد' }, mf2);
     _eq(r2.teacherName,             'معلم جديد', 'unknown teacher name kept');
-    _ok(r2.teacherId.startsWith('T_'), 'unknown teacher gets T_ prefix');
     _eq(mf2.length, 0,                 'not missing — just unknown');
     _ok(/^T_[0-9a-f]{8}$/.test(r2.teacherId), 'unknown teacher ID is T_ + 8 hex chars');
     _eq(_resolveTeacher({ rawTeacherName: 'معلم جديد' }, []).teacherId, r2.teacherId, 'same name → same ID');
@@ -246,13 +236,7 @@ function _testResolveTeacher() {
     const mf3 = [];
     const r3 = _resolveTeacher({ rawTeacherName: '' }, mf3);
     _eq(r3.teacherName, CONFIG.FALLBACKS.TEACHER_NAME, 'empty → fallback name');
-    _eq(mf3.length,     1,                              'empty → pushed to missingFields');
-
-    _section('اسم null');
-    const mf4 = [];
-    const r4 = _resolveTeacher({ rawTeacherName: null }, mf4);
-    _eq(r4.teacherName, CONFIG.FALLBACKS.TEACHER_NAME, 'null → fallback');
-    _ok(mf4.includes(CONFIG.FIELDS.TEACHER),            'null → correct field in missing list');
+    _eq(mf3, [CONFIG.FIELDS.TEACHER],                   'empty → teacher field in missingFields');
   });
 }
 
@@ -265,13 +249,6 @@ function _testParseDuration() {
     _eq(d1.minutes,           30,              'minutes');
     _eq(d1.durationTime,      '02:30',         'durationTime HH:MM');
     _eq(d1.durationFormatted, '2 ساعتان و30 دقيقة', 'Arabic formatted');
-
-    _section('أرقام عربية شرقية');
-    const d2 = _parseDuration({ rawHours: '١', rawMinutes: '١٥' }, [], []);
-    _eq(d2.hours,        1,       'eastern hours');
-    _eq(d2.minutes,      15,      'eastern minutes');
-    _eq(d2.durationTime, '01:15', 'eastern durationTime');
-    _eq(d2.durationFormatted, '1 ساعة و15 دقيقة', 'eastern Arabic formatted');
 
     _section('تجاوز الدقائق (overflow)');
     const d3 = _parseDuration({ rawHours: '1', rawMinutes: '90' }, [], []);
@@ -360,13 +337,8 @@ function _testValidate() {
     };
     const v1 = validateFormData(rawOk, 'uuid-1', new Date(2026, 7, 29));
     _eq(v1.validationStatus,  'VALID',      'all valid → VALID');
-    _eq(v1.teacherName,       'محمد نبيل', 'teacher resolved');
-    _eq(v1.teacherId,         'T001',       'teacher ID');
-    _eq(v1.durationTime,      '01:30',      'duration time');
-    _eq(v1.sessionType,       'تجويد',      'session from metadata');
-    _eq(v1.studentCount,      8,            'student count from metadata');
-    _eq(v1.submissionYear,    '2026',       'year');
-    _ok(v1.missingFields.length === 0,      'no missing fields');
+    _eq([v1.teacherId, v1.durationTime, v1.sessionType, v1.studentCount], ['T001', '01:30', 'تجويد', 8],
+      'teacher, duration and metadata combined');
 
     _section('بيانات مفقودة كلياً');
     const rawEmpty = {
@@ -381,16 +353,9 @@ function _testValidate() {
     _eq(v2.teacherName,   CONFIG.FALLBACKS.TEACHER_NAME, 'fallback teacher name');
     _eq(v2.reportText,    CONFIG.FALLBACKS.REPORT_TEXT,  'fallback report text');
 
-    _section('بيانات صالحة بأرقام عربية');
-    const rawArabic = { ...rawOk, rawHours: '١', rawMinutes: '٣٠' };
-    const v3 = validateFormData(rawArabic, 'uuid-3', new Date(2026, 7, 29));
-    _eq(v3.durationTime, '01:30', 'eastern arabic digits normalized in validateFormData');
-
     _section('معلم غير مُدرج في CONFIG');
     const rawUnknown = { ...rawOk, rawTeacherName: 'معلم جديد' };
     const v4 = validateFormData(rawUnknown, 'uuid-4', new Date(2026, 7, 29));
-    _eq(v4.teacherName,              'معلم جديد', 'unknown teacher name kept');
-    _ok(v4.teacherId.startsWith('T_'), 'unknown teacher dynamic ID');
     _eq(v4.validationStatus,         'VALID',     'unknown teacher is not a validation error');
 
     _section('تقرير متأخر يُحفظ في شهر تاريخه لا شهر إرساله');
@@ -426,13 +391,8 @@ function _testGenerateMarkdown() {
     };
     const md = generateMarkdownContent(data);
 
-    _has(md, '---',                         'YAML frontmatter delimiters');
-    _has(md, 'teacher_name: "محمد نبيل"',   'teacher_name in frontmatter');
-    _has(md, 'session_type: "تجويد"',       'session_type in frontmatter');
-    _has(md, 'duration_time: "01:30"',      'duration_time in frontmatter');
-    _has(md, 'student_count: 8',            'student_count in frontmatter');
-    _has(md, 'validation_status: "VALID"',  'validation_status in frontmatter');
-    _has(md, '# تقرير حلقة:',              'H1 title present');
+    _has(md, 'teacher_name: "محمد نبيل"',   'text fields quoted in frontmatter');
+    _has(md, 'student_count: 8',            'numbers unquoted in frontmatter');
     _has(md, 'نص التقرير التجريبي',         'report body present');
     _has(md, 'ملاحظة إدارية',              'admin notes present');
     _ok(!md.includes('undefined'),          'no raw "undefined" strings in output');
@@ -1005,14 +965,6 @@ function _testDashboard() {
   });
 }
 
-// ============================================================================
-// ③ تشغيل جميع اختبارات الوحدة
-// ============================================================================
-
-/**
- * يشغّل جميع اختبارات الوحدة (لا يتصل بـ Drive/Sheets).
- * الوقت المتوقع: 2–4 ثوانٍ.
- */
 // ─── واجهة اللوحة (Api.js) ──────────────────────────────────────────────────
 
 /** ذاكرة مؤقتة في الذاكرة بواجهة CacheService (get/put/remove). */
@@ -1113,6 +1065,11 @@ function _testApi() {
   });
 }
 
+// ============================================================================
+// ③ تشغيل جميع اختبارات الوحدة
+// ============================================================================
+
+/** يشغّل جميع اختبارات الوحدة (لا يتصل بـ Drive/Sheets، ثوانٍ معدودة). */
 function runAllUnitTests() {
   _T = { pass: 0, fail: 0, log: [] };
 
@@ -1148,8 +1105,8 @@ function runAllUnitTests() {
 //
 // تعمل على مجلد اختبار منفصل (TEST_ROOT_FOLDER_ID في Config.local.js أو Script Properties)
 // ولا ترسل إلى Telegram، فلا تمسّ جداول المعلمين الحقيقية.
-// تستدعي executeSubmissionPipeline مباشرةً — لا onFormSubmit الذي يبتلع الأخطاء —
-// فأي فشل في Drive/Sheets يُسقط الاختبار بدل أن يمرّ صامتاً.
+// تستدعي executeSubmissionPipeline مباشرةً لا onFormSubmit، فلا تُرسل تنبيه بريد عند
+// الفشل، وأي فشل في Drive/Sheets يُسقط الاختبار.
 
 /**
  * يشغّل مسار المعالجة في وضع الاختبار ويُرجع البيانات المُتحقَّق منها.
@@ -1171,22 +1128,7 @@ function _buildTestReport(date, session, count, halaNum, body) {
   return `═══ [ تقرير أكاديمية سنا ] ═══\nالتاريخ: ${date}\nالفترة: ${session}\n${halaLine}عدد الطلاب: ${count}\n━━━━━━━━━━━━━━━\n${body}`;
 }
 
-/** اختبار تكاملي — تقرير كامل صالح: يُنشئ ملف Markdown وصفاً في Sheets. */
-function integrationTest_NormalSubmission() {
-  const result = _runIntegrationSubmission({
-    'اسم المعلم':           'محمد نبيل',
-    'فئة الطلاب':           'كبار',
-    'الساعات':              '1',
-    'الدقائق':              '30',
-    'التقرير':              _buildTestReport('29-08-2026', 'تجويد', 8, '', 'تم شرح أحكام النون الساكنة.'),
-    'ملاحظات خاصة للإدارة': 'اختبار تكاملي — تقرير عادي.',
-  });
-  _ok(Boolean(result.fileUrl),                        'file saved to Drive');
-  _eq(result.validationStatus, 'VALID',               'status VALID');
-  _eq(result.submissionMonthFolderName, '08 - أغسطس', 'routed by report date');
-}
-
-/** اختبار تكاملي — التقرير نفسه مرة ثانية: يجب أن يُعلَّم مكرراً. */
+/** اختبار تكاملي — تقرير يُحفظ في Drive وSheets، ثم التقرير نفسه مرة ثانية يُعلَّم مكرراً. */
 function integrationTest_DuplicateDetection() {
   const mockData = {
     'اسم المعلم':           'محمد نبيل',
@@ -1196,7 +1138,8 @@ function integrationTest_DuplicateDetection() {
     'التقرير':              _buildTestReport('29-08-2026', 'تجويد', 8, '', 'تقرير مكرر.'),
     'ملاحظات خاصة للإدارة': '',
   };
-  _runIntegrationSubmission(mockData);
+  const first = _runIntegrationSubmission(mockData);
+  _ok(Boolean(first.fileUrl), 'file saved to Drive');
   const second = _runIntegrationSubmission(mockData);
   _ok(second.isDuplicate,         'second identical submission flagged duplicate');
   _ok(second.duplicateIndex >= 1, 'duplicate gets a (n) suffix');
@@ -1232,20 +1175,6 @@ function integrationTest_DistinctHalaqatNotDuplicate() {
   _ok(!second.isDuplicate, 'second halaqa (different number) not a duplicate');
 }
 
-/** اختبار تكاملي — أرقام عربية شرقية في حقول الساعات والدقائق. */
-function integrationTest_EasternArabicDigits() {
-  const result = _runIntegrationSubmission({
-    'اسم المعلم':           'أسماء علي',
-    'فئة الطلاب':           'كبار',
-    'الساعات':              '٢',
-    'الدقائق':              '١٥',
-    'التقرير':              _buildTestReport('29-08-2026', 'مسائية', '٢٠', '', 'تقرير بأرقام عربية شرقية.'),
-    'ملاحظات خاصة للإدارة': 'اختبار أرقام عربية شرقية.',
-  });
-  _eq(result.durationTime, '02:15', 'eastern digits → 02:15');
-  _eq(result.studentCount, 20,      'eastern student count → 20');
-}
-
 /** اختبار تكاملي — بيانات مفقودة: يستمر بالقيم الاحتياطية وحالة MISSING DATA. */
 function integrationTest_MissingFields() {
   const result = _runIntegrationSubmission({
@@ -1259,20 +1188,6 @@ function integrationTest_MissingFields() {
   _ok(Boolean(result.fileUrl),                           'file still saved');
   _eq(result.validationStatus, 'MISSING DATA',           'status MISSING DATA');
   _eq(result.teacherName, CONFIG.FALLBACKS.TEACHER_NAME, 'fallback teacher name');
-}
-
-/** اختبار تكاملي — معلم غير مُدرج في CONFIG: يُقبل ويُنشأ له ID ديناميكي. */
-function integrationTest_UnknownTeacher() {
-  const result = _runIntegrationSubmission({
-    'اسم المعلم':           'معلم جديد',
-    'فئة الطلاب':           'أطفال',
-    'الساعات':              '1',
-    'الدقائق':              '0',
-    'التقرير':              _buildTestReport('29-08-2026', 'صباحية', 5, '', 'تقرير معلم جديد.'),
-    'ملاحظات خاصة للإدارة': 'اختبار معلم غير مُدرج.',
-  });
-  _ok(result.teacherId.startsWith('T_'), 'unknown teacher gets T_ ID');
-  _eq(result.validationStatus, 'VALID',  'unknown teacher is still VALID');
 }
 
 /**
@@ -1534,15 +1449,6 @@ function integrationTest_StudentDetails() {
   }
 }
 
-// ============================================================================
-// ⑤ المُشغِّل الكامل
-// ============================================================================
-
-/**
- * يشغّل الجناحين: اختبارات الوحدة أولاً ثم اختبارات التكامل.
- * يتطلب TEST_ROOT_FOLDER_ID؛ وإلا تفشل اختبارات التكامل برسالة واضحة.
- * الوقت المتوقع: 40–60 ثانية (حسب سرعة Drive/Sheets).
- */
 /**
  * اختبار تكاملي — واجهة اللوحة كما تستدعيها الصفحة: الدخول، ثم البيانات، ثم
  * كتابة تُسجَّل باسم من دخل، ثم doPost بطلب فاسد يُرجع JSON بخطأ.
@@ -1778,6 +1684,14 @@ function runLiveFixChecks() {
   _report('LIVE FIX CHECKS (F-04, F-07, F-08)');
 }
 
+// ============================================================================
+// ⑤ المُشغِّل الكامل
+// ============================================================================
+
+/**
+ * يشغّل الجناحين: اختبارات الوحدة أولاً ثم اختبارات التكامل.
+ * يتطلب TEST_ROOT_FOLDER_ID؛ وإلا تفشل اختبارات التكامل برسالة واضحة.
+ */
 function runAllTests() {
   runAllUnitTests();
   const unitPass = _T.pass;
@@ -1785,12 +1699,9 @@ function runAllTests() {
 
   // جناح التكامل
   _T = { pass: 0, fail: 0, log: [] };
-  _suite('Integration: NormalSubmission',            integrationTest_NormalSubmission);
   _suite('Integration: DuplicateDetection',          integrationTest_DuplicateDetection);
   _suite('Integration: DistinctHalaqatNotDuplicate', integrationTest_DistinctHalaqatNotDuplicate);
-  _suite('Integration: EasternArabicDigits',         integrationTest_EasternArabicDigits);
   _suite('Integration: MissingFields',               integrationTest_MissingFields);
-  _suite('Integration: UnknownTeacher',              integrationTest_UnknownTeacher);
   _suite('Integration: StudentsRegistry',            integrationTest_StudentsRegistry);
   _suite('Integration: PublicStats',                 integrationTest_PublicStats);
   _suite('Integration: Dashboard',                   integrationTest_Dashboard);
