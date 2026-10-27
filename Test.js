@@ -1721,6 +1721,63 @@ function integrationTest_Honors() {
     removed.log[0].action], [0, 'حذف تكريم'], 'honor removed and logged');
 }
 
+/**
+ * اختبار تكاملي — صفوف تبويب المعلم: ملاحظة تبدأ بـ «=» تبقى نصاً (F-08)، وصفّا
+ * الإجمالي والمتوسط يُنقلان إلى الآخر وإن كُتب صف يدوي تحتهما (F-07).
+ */
+function integrationTest_SheetFixes() {
+  const tag = String(Date.now()).slice(-6);
+  const teacher = 'سمية حمدي';
+  const now = new Date();
+  const year = String(now.getFullYear());
+  const pad = n => String(n).padStart(2, '0');
+  const month = `${year}-${pad(now.getMonth() + 1)}`;
+  const send = (n, note) => _runIntegrationSubmission({
+    'اسم المعلم': teacher, 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '0',
+    'التقرير': _buildTestReport(`${pad(now.getDate())}-${month.slice(5)}-${year}`, 'صباحية', 2, `${tag}${n}`,
+      _sampleStudentText([{ name: `سالم ${tag}` }])),
+    'ملاحظات خاصة للإدارة': note,
+  });
+  const tabOf = () => _withMode(true, () => {
+    const file = _teacherSheetFiles(year).find(f => f.teacher === teacher);
+    return SpreadsheetApp.openById(file.id).getSheets().find(s => _tabMonth(s.getName(), year) === month);
+  });
+  const rowsOf = tab => tab.getRange(2, 1, tab.getLastRow() - 1, 6).getValues();
+
+  send(1, '=1+1');
+  let tab = tabOf();
+  const noted = rowsOf(tab).find(r => String(r[1]).includes(`حلقة ${tag}1`));
+  // Read as a formula, the cell would hold 2, not the text typed.
+  _eq(noted && noted[5], '=1+1', 'a note starting with = is kept as text (F-08)');
+
+  const hand = `يدوي ${tag}`;
+  tab.appendRow([hand, '', '', '', '', '']);
+  send(2, '');
+  tab = tabOf();
+  const after = rowsOf(tab);
+  const labels = after.map(r => String(r[0]).trim());
+  _eq(labels.slice(-2), ['الإجمالي', 'المتوسط'], 'summary rows moved to the end below a hand-typed row (F-07)');
+  _eq(summaryRowIndexes(after.map(r => [r[0]])).length, 2, 'no summary row left in the middle (F-07)');
+
+  const handRow = labels.indexOf(hand);
+  if (handRow !== -1) {
+    tab.deleteRow(handRow + 2);
+    removeSummaryRows(tab);
+    appendSummaryRows(tab);
+  }
+}
+
+/**
+ * فحص حيّ قصير لإصلاحات التدقيق (F-04، F-07، F-08) في مجلد الاختبار؛ يُشغَّل وحده
+ * لأن runAllTests صار يتجاوز حد الدقائق الست في المحرر.
+ */
+function runLiveFixChecks() {
+  _T = { pass: 0, fail: 0, log: [] };
+  _suite('Integration: ReportEdits', integrationTest_ReportEdits);
+  _suite('Integration: SheetFixes',  integrationTest_SheetFixes);
+  _report('LIVE FIX CHECKS (F-04, F-07, F-08)');
+}
+
 function runAllTests() {
   runAllUnitTests();
   const unitPass = _T.pass;
