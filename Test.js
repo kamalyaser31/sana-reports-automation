@@ -843,6 +843,15 @@ function _testPublicStats() {
     ];
     _eq(supersededRows(tab, '29-08-2026', 'تجويد'), [0, 1],
       'a resubmission replaces its halaqa\'s unmarked rows, whatever the date spelling (S-58)');
+    const earlier = [
+      ['29-08-2026', 'تجويد', 'كبار', '1:00', '8', '(تقرير مكرر) أول'],
+      ['الثلاثاء، ٢٩ أغسطس ٢٠٢٦', 'تجويد', 'كبار', '1:30', '8', '(تقرير مكرر)'],
+      ['29-08-2026', 'صباحية', 'كبار', '1:00', '8', '(تقرير مكرر)'],
+    ];
+    const counted = ['29-08-2026', 'تجويد', 'كبار', '1:00', '8', ''];
+    _eq([restoredRow(earlier, counted), restoredRow(earlier, earlier[0]),
+      restoredRow(earlier.concat([counted]), counted)], [1, -1, -1],
+      'deleting the counted report restores its halaqa\'s last earlier one; a marked or still-counted halaqa none (F-04)');
     const appended = [];
     const range = { setBackground() { return range; }, setFontWeight() { return range; },
       setNumberFormat() { return range; }, setHorizontalAlignment() { return range; } };
@@ -1608,6 +1617,22 @@ function integrationTest_ReportEdits() {
   const last = tab.getLastRow();
   _eq(last < 2 ? [] : tab.getRange(last - 1, 1, 2, 1).getValues().map(r => r[0]),
     last < 2 ? [] : ['الإجمالي', 'المتوسط'], 'total and average rebuilt after a delete');
+
+  // A halaqa sent twice: deleting the counted report brings the earlier one back (F-04).
+  const twice = {
+    'اسم المعلم': teacher, 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '0',
+    'التقرير': _buildTestReport(`${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${year}`, 'صباحية', 2, `${tag}9`,
+      _sampleStudentText([{ name: `ياسر ${tag}` }])),
+    'ملاحظات خاصة للإدارة': '',
+  };
+  _runIntegrationSubmission(twice);
+  _runIntegrationSubmission(twice);
+  const halaqa = d => d.reports.filter(r => r.teacher === teacher && r.session === `صباحية (حلقة ${tag}9)`);
+  const pair = halaqa(call('data', {}, token).data);
+  _eq(pair.map(r => r.status), ['مكرر', ''], 'the resubmission counts and the first is marked (S-58)');
+  const kept = halaqa(call('deleteReport', { teacher, month: pair[1].month, row: pair[1].row, stamp: pair[1].stamp }, token).data);
+  _eq(kept.map(r => [r.status, r.notes.indexOf(DUPLICATE_MARK)]), [['', -1]],
+    'after deleting the counted one, the earlier report counts again');
 }
 
 /** اختبار تكاملي — تكريم طالب وحذفه ومبلغ التكريم عبر الـ API (S-60). */

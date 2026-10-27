@@ -113,7 +113,8 @@ const API_WRITES = {
   deleteReport: {
     label: 'حذف تقرير',
     run: (a, year, test) => dashboardDeleteReport(_reportRef(a), year, test),
-    details: (a, r) => `${_reportPlace(a, r.before)}: المدة ${r.before[3]}، الطلاب ${r.before[4] || '-'}`,
+    details: (a, r) => `${_reportPlace(a, r.before)}: المدة ${r.before[3]}، الطلاب ${r.before[4] || '-'}`
+      + (r.restored ? '، وحُسب التقرير السابق للحلقة' : ''),
   },
 };
 

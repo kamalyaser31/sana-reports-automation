@@ -646,10 +646,38 @@ function deleteTeacherReport(ref, year) {
     const { sheet, row, cells } = _openReportRow(ref, year, new Date());
     removeSummaryRows(sheet);
     sheet.deleteRow(row);
+    // The counted report of a resubmitted halaqa gone, the one before it counts again (F-04).
+    let restored = false;
+    if (sheet.getLastRow() >= 2) {
+      const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues();
+      const i = restoredRow(rows, cells);
+      if (i !== -1) {
+        sheet.getRange(i + 2, 6).setValue(_cellText(rows[i][5]).slice(DUPLICATE_MARK.length).trim());
+        restored = true;
+      }
+    }
     appendSummaryRows(sheet);
     _refreshCachedTab(sheet, ref.teacher, ref.month, year);
-    return { before: cells };
+    return { before: cells, restored };
   });
+}
+
+/**
+ * The row that counts again when a report is deleted (F-04): the last row of
+ * the same halaqa marked «(تقرير مكرر)», when no unmarked row of it is left. A
+ * deleted row that was itself marked gives nothing back.
+ * @param {Array<Array>} rows - The tab's rows after the delete (columns A:F).
+ * @param {Array} deleted - The deleted row's cells.
+ * @returns {number} Index into rows, or -1.
+ */
+function restoredRow(rows, deleted) {
+  const marked = r => _cellText(r[5]).indexOf(DUPLICATE_MARK) === 0;
+  if (marked(deleted)) return -1;
+  const key = _slotDateKey(deleted[0]);
+  const label = _cellText(deleted[1]);
+  const same = rows.map((r, i) => i).filter(i => _cellText(rows[i][1]) === label && _slotDateKey(rows[i][0]) === key);
+  if (same.some(i => !marked(rows[i]))) return -1;
+  return same.length ? same[same.length - 1] : -1;
 }
 
 /**
