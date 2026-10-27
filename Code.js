@@ -130,7 +130,6 @@ const CONFIG = {
     STUDENT_COUNT:      0,
     REPORT_TEXT:        'لا يوجد نص للتقرير.',
     ADMIN_NOTES:        'لا توجد ملاحظات إدارية.',
-    DATE_TEXT:          'تاريخ غير محدد',
   },
 };
 
@@ -342,10 +341,13 @@ function extractFormData(e) {
  * @param {string} str
  * @returns {string}
  */
+/** Zero-width marks and the no-break space, read as a plain space. */
+const INVISIBLE_SPACES_RE = /[\u200B-\u200D\uFEFF\u00A0]/g;
+
 function normalizeDigitsAndText(str) {
   if (!str) return '';
   const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
-  let normalized = String(str).replace(/[\u200B-\u200D\uFEFF\u00A0]/g, ' ');
+  let normalized = String(str).replace(INVISIBLE_SPACES_RE, ' ');
 
   // String.prototype.replaceAll is unavailable in the V8 runtime used by Google Apps Script
   // (pre-ES2021 build). split/join is the standard workaround in this environment.
@@ -365,7 +367,7 @@ function parseReportMetadata(text) {
     return { dateText: '', sessionTypeText: '', studentCountText: '', halaNumText: '' };
   }
 
-  const cleanText    = text.replace(/[\u200B-\u200D\uFEFF\u00A0]/g, ' ');
+  const cleanText    = text.replace(INVISIBLE_SPACES_RE, ' ');
   const dateMatch    = cleanText.match(/التاريخ\s*[:：]\s*([^\n\r]+)/);
   const sessionMatch = cleanText.match(/(?:الفترة|نوع الحلقة)\s*[:：]\s*([^\n\r]+)/);
   const countMatch   = cleanText.match(/عدد الطلاب\s*[:：]\s*([^\n\r]+)/);
@@ -703,9 +705,11 @@ function resolveTargetFolder(data) {
 
 /**
  * Returns the Root Folder for Sana Academy reports.
- * @returns {GoogleAppsScript.Drive.Folder}
+ * @param {boolean} [create=true] - false never creates one: readers must not
+ *   make an empty root when the real one is out of reach.
+ * @returns {GoogleAppsScript.Drive.Folder|null}
  */
-function getRootFolder() {
+function getRootFolder(create = true) {
   const rootId = CONFIG.ROOT_FOLDER_ID;
   if (_TEST_MODE) {
     // Never fall back to the production folder search while testing.
@@ -721,7 +725,7 @@ function getRootFolder() {
   }
 
   return _firstNotTrashed(DriveApp.getFoldersByName(CONFIG.ROOT_FOLDER_NAME))
-    || DriveApp.createFolder(CONFIG.ROOT_FOLDER_NAME);
+    || (create ? DriveApp.createFolder(CONFIG.ROOT_FOLDER_NAME) : null);
 }
 
 /**

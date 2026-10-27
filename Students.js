@@ -905,13 +905,7 @@ function _findRegistry(year) {
  * @returns {GoogleAppsScript.Drive.Folder|null}
  */
 function _findRootFolder() {
-  if (_TEST_MODE) return getRootFolder();
-  const id = CONFIG.ROOT_FOLDER_ID;
-  if (id && id.trim()) {
-    try { return DriveApp.getFolderById(id.trim()); }
-    catch (e) { console.warn(`[DRIVE WARNING] Root folder "${id}" not accessible; searching by name.`); }
-  }
-  return _firstNotTrashed(DriveApp.getFoldersByName(CONFIG.ROOT_FOLDER_NAME));
+  return getRootFolder(false);
 }
 
 /**
