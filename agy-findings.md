@@ -1,5 +1,7 @@
 # Audit Findings (Antigravity), verified
 
+**Status 2026-10-27:** M1 (F-06), M2 (F-05, a slow-request notice, no abort), L1–L4 and L6 are fixed. L5 is left as is: the measured runs show no lock wait (longest report 21 s). I1–I4 stay known trade-offs; I2 now applies to `savePay`.
+
 Each finding below was checked against the code on 2026-10-26. Claims that did not hold were dropped (see the end). Severity: **Medium** = a real gap worth fixing soon; **Low** = minor, fix when convenient; **Info** = known trade-off, no action unless it starts to hurt.
 
 Fixes in `Code.js` need Kamal's explicit permission, per the project rules.
