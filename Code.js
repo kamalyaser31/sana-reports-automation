@@ -171,6 +171,8 @@ function onFormSubmit(e) {
     try { sendEmailAlert(errorDetails); }
     catch (emailError) { console.error('[ALERT FAILURE] Failed to send email alert:', emailError.message); }
 
+    // Thrown again so the run shows as Failed in Executions, not Completed (F-06).
+    throw error;
   } finally {
     if (hasLock) {
       try { lock.releaseLock(); }
@@ -871,6 +873,16 @@ function verifySavedFile(file) {
 const DUPLICATE_MARK = '(تقرير مكرر)';
 
 /**
+ * Form text for a cell: a leading = + - or @ would make Sheets read it as a
+ * formula, so it is kept as text (F-08).
+ * @param {*} v
+ * @returns {*}
+ */
+function sheetText(v) {
+  return typeof v === 'string' && /^[=+\-@]/.test(v) ? `'${v}` : v;
+}
+
+/**
  * A report date as one comparable key: "dd-mm-yyyy" when it can be read, else the text.
  * @param {*} text
  * @returns {string}
@@ -914,7 +926,7 @@ function recordToTeacherSheet(yearTeacherFolder, data) {
   if (data.isDuplicate && sheet.getLastRow() >= 2) {
     const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues();
     replaced = supersededRows(rows, data.reportDateText || data.submissionDateFormatted, _sessionLabel(data));
-    replaced.forEach(i => sheet.getRange(i + 2, 6).setValue(`${DUPLICATE_MARK} ${rows[i][5]}`.trim()));
+    replaced.forEach(i => sheet.getRange(i + 2, 6).setValue(sheetText(`${DUPLICATE_MARK} ${rows[i][5]}`.trim())));
   }
 
   // Duration stored as a day fraction so SUM/AVERAGE work natively in Sheets.
@@ -925,11 +937,11 @@ function recordToTeacherSheet(yearTeacherFolder, data) {
 
   sheet.appendRow([
     data.reportDateText || data.submissionDateFormatted,
-    _sessionLabel(data),
-    data.studentCategory,
+    sheetText(_sessionLabel(data)),
+    sheetText(data.studentCategory),
     durationDayFraction,
     data.studentCount !== null ? data.studentCount : '',
-    adminCellValue,
+    sheetText(adminCellValue),
   ]);
 
   const newDataRow = sheet.getLastRow();
@@ -939,39 +951,29 @@ function recordToTeacherSheet(yearTeacherFolder, data) {
   }
 
   appendSummaryRows(sheet);
-
-  for (let i = 1; i <= CONFIG.SHEET_HEADERS.length; i++) {
-    sheet.autoResizeColumn(i);
-  }
   return { replaced: replaced.length };
 }
 
 /**
- * Removes existing summary rows (الإجمالي / المتوسط) from the sheet bottom.
- * Reads column A in a single batch to avoid per-row API calls.
+ * Removes the summary rows (الإجمالي / المتوسط) wherever they are: a row typed
+ * by hand below them would otherwise leave them in the middle (F-07).
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
  */
 function removeSummaryRows(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return;
+  summaryRowIndexes(sheet.getRange(2, 1, lastRow - 1, 1).getValues())
+    .reverse().forEach(i => sheet.deleteRow(i + 2));
+}
 
-  // Single batch read — one API call instead of one per row.
-  const columnAValues = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-  const summaryLabels = new Set(['الإجمالي', 'المتوسط']);
-
-  // Find the topmost summary row scanning from the bottom; stop at first non-summary.
-  let deleteFrom = -1;
-  for (let i = columnAValues.length - 1; i >= 0; i--) {
-    if (summaryLabels.has(String(columnAValues[i][0]).trim())) {
-      deleteFrom = i + 2; // +1 for 1-based index, +1 for header row offset
-    } else {
-      break;
-    }
-  }
-
-  if (deleteFrom > 0) {
-    sheet.deleteRows(deleteFrom, lastRow - deleteFrom + 1);
-  }
+/**
+ * Indexes of the rows whose first cell is الإجمالي or المتوسط.
+ * @param {Array<Array>} columnA
+ * @returns {number[]}
+ */
+function summaryRowIndexes(columnA) {
+  const labels = new Set(['الإجمالي', 'المتوسط']);
+  return columnA.map((r, i) => (labels.has(String(r[0]).trim()) ? i : -1)).filter(i => i !== -1);
 }
 
 /**

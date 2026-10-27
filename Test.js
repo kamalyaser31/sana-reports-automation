@@ -852,6 +852,10 @@ function _testPublicStats() {
     _eq([restoredRow(earlier, counted), restoredRow(earlier, earlier[0]),
       restoredRow(earlier.concat([counted]), counted)], [1, -1, -1],
       'deleting the counted report restores its halaqa\'s last earlier one; a marked or still-counted halaqa none (F-04)');
+    _eq(['=1+1', '+20', '-غاب', '@x', 'حضر', 5].map(sheetText), ["'=1+1", "'+20", "'-غاب", "'@x", 'حضر', 5],
+      'form text that Sheets would read as a formula stays text (F-08)');
+    _eq(summaryRowIndexes([['1-9'], ['الإجمالي'], ['المتوسط'], ['يدوي'], [' الإجمالي '], ['المتوسط']]), [1, 2, 4, 5],
+      'summary rows are found wherever they are (F-07)');
     const appended = [];
     const range = { setBackground() { return range; }, setFontWeight() { return range; },
       setNumberFormat() { return range; }, setHorizontalAlignment() { return range; } };

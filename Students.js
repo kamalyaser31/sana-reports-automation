@@ -389,8 +389,8 @@ function sortStudentsByLastSeen(students) {
 function studentToRow(s) {
   const st = deriveStudentStats(s.slots);
   return [
-    s.name, s.gender, st.category, st.firstSeen, st.lastSeen, st.attendance,
-    s.firstHifz, s.firstHifzDate || '', s.lastHifz, s.lastHifzDate || '',
+    sheetText(s.name), s.gender, st.category, st.firstSeen, st.lastSeen, st.attendance,
+    sheetText(s.firstHifz), s.firstHifzDate || '', sheetText(s.lastHifz), s.lastHifzDate || '',
     st.repeats, st.medals, JSON.stringify({ key: s.key, slots: s.slots }),
   ].concat(s.extra || []);
 }

@@ -652,7 +652,7 @@ function deleteTeacherReport(ref, year) {
       const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues();
       const i = restoredRow(rows, cells);
       if (i !== -1) {
-        sheet.getRange(i + 2, 6).setValue(_cellText(rows[i][5]).slice(DUPLICATE_MARK.length).trim());
+        sheet.getRange(i + 2, 6).setValue(sheetText(_cellText(rows[i][5]).slice(DUPLICATE_MARK.length).trim()));
         restored = true;
       }
     }
