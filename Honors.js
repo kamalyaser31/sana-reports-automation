@@ -66,9 +66,42 @@ function honorAmountFor(month, amounts) {
   return (past.length ? past[past.length - 1] : amounts[0]).amount;
 }
 
+/**
+ * The honors rows a name correction moves (F-03): those of the teacher's tab
+ * whose student key is the wrong name's, with the right key and name.
+ * @param {Array<Array>} rows - «التكريمات» values.
+ * @param {string} tabName - The teacher's registry tab.
+ * @param {string} from - The name as written.
+ * @param {string} to - The correct name.
+ * @returns {Array<{row: number, key: string, name: string}>}
+ */
+function honorsAfterAlias(rows, tabName, from, to) {
+  const fromKey = studentNameKey(from);
+  const name = cleanStudentName(to);
+  return readHonors(rows).filter(h => h.teacher === tabName && h.key === fromKey)
+    .map(h => ({ row: h.row, key: studentNameKey(name), name }));
+}
+
 // ============================================================================
 // 2. SPREADSHEET
 // ============================================================================
+
+/**
+ * Moves a corrected student's honors to the right name, so they stay counted
+ * for that student. Runs inside the alias's script lock.
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} registry
+ * @param {string} tabName
+ * @param {string} from
+ * @param {string} to
+ */
+function moveHonorsToName(registry, tabName, from, to) {
+  const sheet = registry.getSheetByName(REGISTRY.HONORS_TAB);
+  if (!sheet) return;
+  honorsAfterAlias(_readBody(sheet), tabName, from, to).forEach(u => {
+    sheet.getRange(u.row, 3).setValue(u.name);
+    sheet.getRange(u.row, 5).setValue(u.key);
+  });
+}
 
 /** «التكريمات» values of a registry, or []. */
 function readHonorRows(registry) {

@@ -782,6 +782,10 @@ function _testPublicStats() {
     _eq(readHonors(_sampleHonorRows()).map(h => [h.date, h.row]),
       [['2026-10-03', 2], ['2026-10-04', 3], ['2026-10-05', 4], ['2026-09-28', 6]],
       'honors read with their rows; a date cell becomes text, a bad row is left out');
+    _eq(honorsAfterAlias(_sampleHonorRows(), 'محمد نبيل', 'حمزه علاء', 'حمزة علاءالدين'),
+      [{ row: 2, key: studentNameKey('حمزة علاءالدين'), name: 'حمزة علاءالدين' },
+        { row: 3, key: studentNameKey('حمزة علاءالدين'), name: 'حمزة علاءالدين' }],
+      'a name correction moves that teacher\'s honors of the wrong name only (F-03)');
     const amounts = readHonorAmounts([['2026-11', 80], [new Date(2026, 9, 1), 50]]);
     _eq(['2026-09', '2026-10', '2026-12'].map(m => honorAmountFor(m, amounts)).concat([honorAmountFor('2026-10', [])]),
       [50, 50, 80, ''], 'an amount holds from its month; earlier months take the first; none before any');
@@ -1648,10 +1652,18 @@ function integrationTest_Honors() {
   const priced = call('saveHonorAmount', { amount: '٧٥' }, token).data;
   _eq([priced.honorAmount, priced.rateLog[0].action], [75, 'مبلغ التكريم'], 'amount saved in the rates file and logged there');
 
-  const ref = { row: mine.row, date: mine.date, teacher: mine.teacher, key };
+  // A name correction carries the honor to the right name (F-03).
+  const renamed = call('applyAlias', { teacher, from: `نور ${tag}`, to: `نورة ${tag}` }, token).data;
+  const moved = renamed.teachers.find(t => t.name === teacher).students.find(s => s.name === `نورة ${tag}`);
+  const movedHonor = renamed.honors.find(h => h.row === mine.row);
+  _eq([moved.honors, movedHonor.name, movedHonor.key], [1, `نورة ${tag}`, moved.key],
+    'the honor follows the student\'s corrected name');
+
+  const ref = { row: movedHonor.row, date: movedHonor.date, teacher: movedHonor.teacher, key: movedHonor.key };
   _has(refusal('deleteHonor', Object.assign({}, ref, { key: 'x' })), 'حدّث الصفحة', 'a changed row refused');
   const removed = call('deleteHonor', ref, token).data;
-  _eq([student(removed).honors, removed.log[0].action], [0, 'حذف تكريم'], 'honor removed and logged');
+  _eq([removed.teachers.find(t => t.name === teacher).students.find(s => s.key === moved.key).honors,
+    removed.log[0].action], [0, 'حذف تكريم'], 'honor removed and logged');
 }
 
 function runAllTests() {

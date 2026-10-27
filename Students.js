@@ -1150,6 +1150,7 @@ function _applyAliasToTab(sheet, alias) {
   const result = applyAliasToStudents(current.students, alias);
   if (!result.changed) return 'absent';
   writeStudentsTab(sheet, result.students, current.orphans);
+  moveHonorsToName(sheet.getParent(), sheet.getName(), alias.from, alias.to);
   return hasRight ? 'merged' : 'renamed';
 }
 
