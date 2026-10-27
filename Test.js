@@ -645,6 +645,45 @@ function _testRegistryRows() {
     _ok(aliases[1].applied, 'dated alias is applied');
     _eq(_teacherTabName('أ/ب:ج'), 'أ_ب_ج', 'tab name sanitized');
   });
+
+  _suite('writeStudentsTab (F-01)', () => {
+    const sheetWith = rows => {
+      const cells = {};
+      const ops = [];
+      rows.forEach((row, i) => row.forEach((v, j) => { cells[`${i + 2},${j + 1}`] = v; }));
+      const sheet = {
+        ops, cells, failWrite: false,
+        getLastRow: () => Math.max(1, ...Object.keys(cells).filter(k => cells[k] !== '').map(k => Number(k.split(',')[0]))),
+        getLastColumn: () => STUDENT_SYSTEM_COLUMNS,
+        getRange: (r, c, nr, nc) => ({
+          setValues: v => {
+            ops.push('write');
+            if (sheet.failWrite) throw new Error('quota');
+            v.forEach((row, i) => row.forEach((x, j) => { cells[`${r + i},${c + j}`] = x; }));
+          },
+          clearContent: () => {
+            ops.push(`clear ${r}-${r + (nr || 1) - 1}`);
+            for (let i = 0; i < (nr || 1); i++) for (let j = 0; j < (nc || 1); j++) cells[`${r + i},${c + j}`] = '';
+          },
+          setNumberFormat: () => {},
+        }),
+      };
+      return sheet;
+    };
+    const student = (name, day) => ({ key: studentNameKey(name), name, gender: STUDENT_GENDER.MALE,
+      slots: { [`${day}|صباحية|1`]: ['أطفال', 0, 0] }, firstHifz: '', lastHifz: '', extra: [] });
+    const three = [student('حمزة علاء', '2026-10-03'), student('منى سامي', '2026-10-02'), student('علي حسن', '2026-10-01')];
+    const sheet = sheetWith(three.map(studentToRow));
+    writeStudentsTab(sheet, three.slice(0, 2), []);
+    _eq([sheet.ops, sheet.getLastRow()], [['write', 'clear 4-4'], 3],
+      'rows written first, then only the leftover row below is cleared');
+    const failing = sheetWith(three.map(studentToRow));
+    failing.failWrite = true;
+    let thrown = '';
+    try { writeStudentsTab(failing, three.slice(0, 2), []); } catch (e) { thrown = e.message; }
+    _eq([thrown, failing.getLastRow(), failing.cells['2,1']], ['quota', 4, 'حمزة علاء'],
+      'a failed write leaves the tab as it was, not empty');
+  });
 }
 
 // ─── الملف العام (PublicStats.js) ────────────────────────────────────────────

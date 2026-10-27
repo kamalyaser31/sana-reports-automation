@@ -987,10 +987,14 @@ function writeStudentsTab(sheet, students, orphans) {
   const padded = rows.map(r => r.concat(new Array(width - r.length).fill('')));
 
   const lastRow = sheet.getLastRow();
-  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, width).clearContent();
-  if (!padded.length) return;
-  sheet.getRange(2, 1, padded.length, width).setValues(padded);
-  STUDENT_DATE_COLUMNS.forEach(c => sheet.getRange(2, c, padded.length, 1).setNumberFormat(REGISTRY.DATE_FORMAT));
+  // Written first, then only the leftover rows below are cleared (a merge makes
+  // the list shorter), so a failed write never leaves the tab empty (F-01).
+  if (padded.length) {
+    sheet.getRange(2, 1, padded.length, width).setValues(padded);
+    STUDENT_DATE_COLUMNS.forEach(c => sheet.getRange(2, c, padded.length, 1).setNumberFormat(REGISTRY.DATE_FORMAT));
+  }
+  const leftover = lastRow - 1 - padded.length;
+  if (leftover > 0) sheet.getRange(2 + padded.length, 1, leftover, width).clearContent();
 }
 
 // ============================================================================
