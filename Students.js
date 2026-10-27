@@ -664,31 +664,48 @@ function _ensureDetailColumns(sheet) {
 }
 
 /**
- * Saves a student's birth year and phone (S-32), found by key in column M.
- * Empty values clear the cell.
- * @param {string} teacher
- * @param {string} key
- * @param {{birthYear: *, phone: *}} details
+ * Saves the gender, birth year and phone of the students changed on the page
+ * (U-03), each found by key in column M. Every value is checked before any is
+ * written, and each teacher tab is read once. Empty details clear the cell.
+ * @param {Array<{teacher: string, key: string, gender: string, birthYear: *, phone: *}>} list
  * @param {string} [year]
- * @returns {{ birthYear: number|string, phone: string }} What was written.
+ * @returns {Array<{teacher: string, name: string, gender: string, birthYear: number|string, phone: string}>}
  */
-function setStudentDetails(teacher, key, details, year) {
-  const birthYear = normalizeBirthYear(details.birthYear, new Date());
-  const phone = normalizePhone(details.phone);
+function saveStudentsDetails(list, year) {
+  if (!list.length) throw new Error('لا طالب تغيّر ليُحفظ.');
+  const today = new Date();
   return _withScriptLock(() => {
-    const sheet = _registryOrThrow(year).getSheetByName(_teacherTabName(teacher));
-    if (!sheet) throw new Error(`لا تبويب للمعلم «${teacher}» في السجل.`);
-    const cols = _ensureDetailColumns(sheet);
-    const index = _readBody(sheet).findIndex(r => {
-      const s = rowToStudent(r);
-      return s && s.key === key;
+    const ss = _registryOrThrow(year);
+    const tabs = {};
+    const saved = list.map(item => {
+      let tab = tabs[item.teacher];
+      if (!tab) {
+        const sheet = ss.getSheetByName(_teacherTabName(item.teacher));
+        if (!sheet) throw new Error(`لا تبويب للمعلم «${item.teacher}» في السجل.`);
+        tab = tabs[item.teacher] = { sheet, students: _readBody(sheet).map(rowToStudent) };
+      }
+      const index = tab.students.findIndex(st => st && st.key === item.key);
+      if (index === -1) throw new Error('لم يوجد الطالب؛ لعل صفه دُمج. حدّث الصفحة.');
+      const name = tab.students[index].name;
+      try {
+        if (item.gender !== STUDENT_GENDER.MALE && item.gender !== STUDENT_GENDER.FEMALE) throw new Error('الجنس ذكر أو أنثى.');
+        return { teacher: item.teacher, name, row: index + 2, gender: item.gender,
+          birthYear: normalizeBirthYear(item.birthYear, today), phone: normalizePhone(item.phone) };
+      } catch (error) {
+        throw new Error(`${name} عند ${item.teacher}: ${error.message}`);
+      }
     });
-    if (index === -1) throw new Error('لم يوجد الطالب؛ لعل صفه دُمج. حدّث الصفحة.');
-    const row = index + 2;
-    sheet.getRange(row, STUDENT_SYSTEM_COLUMNS + 1 + cols.birthYear).setValue(birthYear);
-    // Text, or Sheets reads "+20…" as a number and drops the plus sign.
-    sheet.getRange(row, STUDENT_SYSTEM_COLUMNS + 1 + cols.phone).setNumberFormat('@').setValue(phone);
-    return { birthYear, phone };
+    Object.keys(tabs).forEach(teacher => {
+      const sheet = tabs[teacher].sheet;
+      const cols = _ensureDetailColumns(sheet);
+      saved.filter(s => s.teacher === teacher).forEach(s => {
+        sheet.getRange(s.row, 2).setValue(s.gender);
+        sheet.getRange(s.row, STUDENT_SYSTEM_COLUMNS + 1 + cols.birthYear).setValue(s.birthYear);
+        // Text, or Sheets reads "+20…" as a number and drops the plus sign.
+        sheet.getRange(s.row, STUDENT_SYSTEM_COLUMNS + 1 + cols.phone).setNumberFormat('@').setValue(s.phone);
+      });
+    });
+    return saved.map(({ teacher, name, gender, birthYear, phone }) => ({ teacher, name, gender, birthYear, phone }));
   });
 }
 
@@ -818,29 +835,30 @@ function _upsertRows(sheet, rows) {
 }
 
 /**
- * Saves the fixed monthly expenses in the rates file (S-51), all checked
- * before any is written; each counts in every open month from
+ * The fixed monthly expenses (S-51); each counts in every open month from
  * PUBLIC_STATS.PAY_FROM. A blank amount clears it.
  * @param {Array<{item: string, amount: *}>} list - Items of PUBLIC_STATS.FIXED_ITEMS.
+ * @returns {Array<[string, number]>}
  */
-function saveFixedExpenses(list) {
-  if (!list.length) throw new Error('لا مبلغ تغيّر ليُحفظ.');
-  const rows = list.map(({ item, amount }) => {
+function _fixedRows(list) {
+  return list.map(({ item, amount }) => {
     if (PUBLIC_STATS.FIXED_ITEMS.indexOf(item) === -1) throw new Error(`لا بند ثابت باسم «${item}».`);
     const text = normalizeDigitsAndText(String(amount === undefined ? '' : amount)).trim();
     const value = text === '' ? 0 : Number(text);
     if (!(value >= 0)) throw new Error(`مبلغ «${item}» رقم لا يقل عن صفر.`);
     return [item, Math.round(value * 100) / 100];
   });
-  _withScriptLock(() => {
-    const ss = _getOrCreateRatesFile();
-    let sheet = ss.getSheetByName(RATES_FILE.FIXED_TAB);
-    if (!sheet) {
-      sheet = ss.insertSheet(RATES_FILE.FIXED_TAB);
-      _styleHeader(sheet, RATES_FILE.FIXED_HEADERS);
-    }
-    _upsertRows(sheet, rows);
-  });
+}
+
+/** Writes checked fixed expenses. Inside the lock. */
+function _writeFixed(rows) {
+  const ss = _getOrCreateRatesFile();
+  let sheet = ss.getSheetByName(RATES_FILE.FIXED_TAB);
+  if (!sheet) {
+    sheet = ss.insertSheet(RATES_FILE.FIXED_TAB);
+    _styleHeader(sheet, RATES_FILE.FIXED_HEADERS);
+  }
+  _upsertRows(sheet, rows);
 }
 
 /**
@@ -1093,50 +1111,51 @@ function applyPendingAliases(year) {
 }
 
 /**
- * Corrects a student's gender (S-11). The row is found by its key in column M,
- * because sorting moves rows.
- * @param {string} teacher
- * @param {string} key
- * @param {string} gender - STUDENT_GENDER value.
+ * Saves what the pay section changed in one go (U-02): the hourly rates, the
+ * fixed expenses and the honor amount, all in the rates file (S-48). Every
+ * value is checked before any is written, under one lock.
+ * @param {{rates: Array<{teacher: string, rate: *}>, fixed: Array<{item: string, amount: *}>, honorAmount: *}} change
  * @param {string} [year]
+ * @param {Date} today
+ * @returns {{rates: Array, fixed: Array, honor: ?{from: string, amount: number}}} What was written.
  */
-function setStudentGender(teacher, key, gender, year) {
-  if (gender !== STUDENT_GENDER.MALE && gender !== STUDENT_GENDER.FEMALE) throw new Error('الجنس ذكر أو أنثى.');
-  _withScriptLock(() => {
-    const sheet = _registryOrThrow(year).getSheetByName(_teacherTabName(teacher));
-    if (!sheet) throw new Error(`لا تبويب للمعلم «${teacher}» في السجل.`);
-    const index = _readBody(sheet).findIndex(r => {
-      const s = rowToStudent(r);
-      return s && s.key === key;
-    });
-    if (index === -1) throw new Error('لم يوجد الطالب؛ لعل صفه دُمج. حدّث الصفحة.');
-    sheet.getRange(index + 2, 2).setValue(gender);
+function savePay(change, year, today) {
+  const rates = _rateRows(change.rates || []);
+  const fixed = _fixedRows(change.fixed || []);
+  const amount = String(change.honorAmount === undefined ? '' : change.honorAmount).trim();
+  const honor = amount === '' ? null : _honorAmountRow(amount, today);
+  if (!rates.length && !fixed.length && !honor) throw new Error('لا شيء تغيّر ليُحفظ.');
+  return _withScriptLock(() => {
+    // Rates first: an unknown teacher is refused before anything is written.
+    if (rates.length) _writeRates(rates, year);
+    if (fixed.length) _writeFixed(fixed);
+    if (honor) _writeHonorAmount(honor);
+    return { rates, fixed, honor };
   });
 }
 
 /**
- * Saves teachers' hourly rates in pounds (S-34) in the rates file (S-48), all
- * checked before any is written: a teacher's row is updated if it exists, else
- * appended. The one rate prices every open month.
+ * Teachers' hourly rates in pounds (S-34): the one rate prices every open month.
  * @param {Array<{teacher: string, rate: *}>} list - Teacher tab names.
- * @param {string} [year]
+ * @returns {Array<[string, number]>}
  */
-function saveTeacherRates(list, year) {
-  if (!list.length) throw new Error('لا سعر تغيّر ليُحفظ.');
-  const rows = list.map(({ teacher, rate }) => {
+function _rateRows(list) {
+  return list.map(({ teacher, rate }) => {
     const value = Number(normalizeDigitsAndText(String(rate)).trim());
     if (!(value > 0)) throw new Error(`سعر ساعة «${teacher}» رقم أكبر من صفر.`);
     return [teacher, Math.round(value * 100) / 100];
   });
-  _withScriptLock(() => {
-    const ss = _registryOrThrow(year);
-    const y = String(year || new Date().getFullYear());
-    const known = new Set(academyTeachers(ss, readTeacherSheetReports(y)).map(t => t.name));
-    rows.forEach(([teacher]) => {
-      if (!known.has(teacher)) throw new Error(`لا معلم باسم «${teacher}».`);
-    });
-    _upsertRows(_getOrCreateRatesFile().getSheetByName(RATES_FILE.RATES_TAB), rows);
+}
+
+/** Writes checked rates, updating a teacher's row or appending it. Inside the lock. */
+function _writeRates(rows, year) {
+  const ss = _registryOrThrow(year);
+  const y = String(year || new Date().getFullYear());
+  const known = new Set(academyTeachers(ss, readTeacherSheetReports(y)).map(t => t.name));
+  rows.forEach(([teacher]) => {
+    if (!known.has(teacher)) throw new Error(`لا معلم باسم «${teacher}».`);
   });
+  _upsertRows(_getOrCreateRatesFile().getSheetByName(RATES_FILE.RATES_TAB), rows);
 }
 
 /**

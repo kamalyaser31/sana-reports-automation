@@ -249,37 +249,17 @@ function dashboardDeleteAlias(teacher, from, year, test) {
 }
 
 /**
- * @param {string} teacher
- * @param {string} key
- * @param {string} gender
- * @param {string} year
- * @returns {Object} Fresh dashboard data.
- */
-function dashboardSetGender(teacher, key, gender, year, test) {
-  return _withMode(test, () => {
-    try {
-      setStudentGender(teacher, key, gender, year);
-      return _getDashboardData(year);
-    } catch (error) {
-      throw _friendlyError(error);
-    }
-  });
-}
-
-/**
- * Saves a student's birth year and phone (S-32).
- * @param {string} teacher
- * @param {string} key
- * @param {{birthYear: *, phone: *}} details
+ * Saves the students changed on the page in one go (U-03).
+ * @param {Array<Object>} list - As saveStudentsDetails.
  * @param {string} year
  * @param {boolean} [test]
- * @returns {Object} Fresh dashboard data.
+ * @returns {Object} { saved, data }
  */
-function dashboardSetDetails(teacher, key, details, year, test) {
+function dashboardSaveStudents(list, year, test) {
   return _withMode(test, () => {
     try {
-      setStudentDetails(teacher, key, details, year);
-      return _getDashboardData(year);
+      const saved = saveStudentsDetails(list, year);
+      return { saved, data: _getDashboardData(year) };
     } catch (error) {
       throw _friendlyError(error);
     }
@@ -339,10 +319,17 @@ function dashboardDeleteHonor(ref, year, test) {
   });
 }
 
-function dashboardSaveHonorAmount(amount, year, test) {
+/**
+ * Saves the pay section in one go (U-02).
+ * @param {Object} change - As savePay.
+ * @param {string} year
+ * @param {boolean} [test]
+ * @returns {Object} { saved, data }
+ */
+function dashboardSavePay(change, year, test) {
   return _withMode(test, () => {
     try {
-      const saved = saveHonorAmount(amount, new Date());
+      const saved = savePay(change, year, new Date());
       return { saved, data: _getDashboardData(year) };
     } catch (error) {
       throw _friendlyError(error);
@@ -360,42 +347,6 @@ function dashboardSaveExpense(month, amount, year, test) {
   return _withMode(test, () => {
     try {
       saveExpense(month, amount);
-      return _getDashboardData(year);
-    } catch (error) {
-      throw _friendlyError(error);
-    }
-  });
-}
-
-/**
- * Saves the hourly rates typed on the page, in one go (S-34).
- * @param {Array<{teacher: string, rate: *}>} list - Pounds per hour.
- * @param {string} year
- * @param {boolean} [test]
- * @returns {Object} Fresh dashboard data.
- */
-function dashboardSaveRates(list, year, test) {
-  return _withMode(test, () => {
-    try {
-      saveTeacherRates(list, year);
-      return _getDashboardData(year);
-    } catch (error) {
-      throw _friendlyError(error);
-    }
-  });
-}
-
-/**
- * Saves the fixed monthly expenses typed on the page, in one go (S-51).
- * @param {Array<{item: string, amount: *}>} list - Pounds; blank clears one.
- * @param {string} year
- * @param {boolean} [test]
- * @returns {Object} Fresh dashboard data.
- */
-function dashboardSaveFixedExpenses(list, year, test) {
-  return _withMode(test, () => {
-    try {
-      saveFixedExpenses(list);
       return _getDashboardData(year);
     } catch (error) {
       throw _friendlyError(error);

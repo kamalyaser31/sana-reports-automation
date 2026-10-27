@@ -34,11 +34,10 @@ const API = {
 const API_SESSION_ACTIONS = ['data', 'unlockPay', 'lockPay', 'refreshReports'];
 
 /**
- * The log action of a rate change; such rows stay out of the shared edit log.
+ * The log action of a pay save; such rows stay out of the shared edit log.
  * Defined here because API_WRITES reads it while this file loads, before Students.js.
  */
-const RATE_LOG_ACTION = 'سعر الساعة';
-const FIXED_LOG_ACTION = 'مصروف ثابت';
+const PAY_LOG_ACTION = 'الرواتب';
 
 /** Write actions: their handler and the Arabic words of their log row (S-44). */
 const API_WRITES = {
@@ -52,31 +51,29 @@ const API_WRITES = {
     run: (a, year, test) => dashboardDeleteAlias(a.teacher, a.from, year, test),
     details: a => `${a.from} عند ${a.teacher}`,
   },
-  setGender: {
-    label: 'الجنس',
-    run: (a, year, test) => dashboardSetGender(a.teacher, a.key, a.gender, year, test),
-    details: a => `${a.label || a.key} عند ${a.teacher}: ${a.gender}`,
+  // One button saves every student changed (U-03): args t0, k0, g0, b0, p0, ...
+  saveStudents: {
+    label: 'بيانات الطلاب',
+    run: (a, year, test) => dashboardSaveStudents(_studentArgs(a), year, test),
+    details: (a, r) => r.saved.map(s => `${s.name} عند ${s.teacher}: ${s.gender}، ${s.birthYear || '-'}، ${s.phone || '-'}`).join('؛ '),
   },
-  setDetails: {
-    label: 'سنة الميلاد والهاتف',
-    run: (a, year, test) => dashboardSetDetails(a.teacher, a.key, { birthYear: a.birthYear, phone: a.phone }, year, test),
-    details: a => `${a.label || a.key} عند ${a.teacher}: ${a.birthYear || '-'}، ${a.phone || '-'}`,
-  },
-  // One button saves every rate typed: args n0, v0, n1, v1, ... (name, value).
-  saveRates: {
-    label: RATE_LOG_ACTION,
+  // One button saves the whole pay section (U-02): rates rn0, rv0, ...; fixed
+  // expenses fn0, fv0, ...; and honorAmount.
+  savePay: {
+    label: PAY_LOG_ACTION,
     pay: true,
     // Logged in the rates file, never in the shared registry (S-48).
     log: 'rates',
-    run: (a, year, test) => dashboardSaveRates(_argPairs(a).map(p => ({ teacher: p.name, rate: p.value })), year, test),
-    details: a => _argPairs(a).map(p => `${p.name}: ${p.value}`).join('، '),
-  },
-  saveFixed: {
-    label: FIXED_LOG_ACTION,
-    pay: true,
-    log: 'rates',
-    run: (a, year, test) => dashboardSaveFixedExpenses(_argPairs(a).map(p => ({ item: p.name, amount: p.value })), year, test),
-    details: a => _argPairs(a).map(p => `${p.name}: ${p.value || 0}`).join('، '),
+    run: (a, year, test) => dashboardSavePay({
+      rates: _argPairs(a, 'r').map(p => ({ teacher: p.name, rate: p.value })),
+      fixed: _argPairs(a, 'f').map(p => ({ item: p.name, amount: p.value })),
+      honorAmount: a.honorAmount,
+    }, year, test),
+    details: (a, r) => [
+      r.saved.rates.length ? `سعر الساعة: ${r.saved.rates.map(([t, v]) => `${t}: ${v}`).join('، ')}` : '',
+      r.saved.fixed.length ? `مصروف ثابت: ${r.saved.fixed.map(([i, v]) => `${i}: ${v}`).join('، ')}` : '',
+      r.saved.honor ? `مبلغ التكريم: ${r.saved.honor.amount} من ${r.saved.honor.from}` : '',
+    ].filter(Boolean).join('؛ '),
   },
   saveExpense: {
     label: 'مصروف',
@@ -93,13 +90,6 @@ const API_WRITES = {
     label: 'حذف تكريم',
     run: (a, year, test) => dashboardDeleteHonor({ row: a.row, date: a.date, teacher: a.teacher, key: a.key }, year, test),
     details: (a, r) => `${r.honor.name} عند ${a.teacher} في ${a.date}`,
-  },
-  saveHonorAmount: {
-    label: 'مبلغ التكريم',
-    pay: true,
-    log: 'rates',
-    run: (a, year, test) => dashboardSaveHonorAmount(a.amount, year, test),
-    details: (a, r) => `${r.saved.amount} من ${r.saved.from}`,
   },
   // A report row of a teacher's sheet (S-59). The notes cell may hold children's
   // names, so it stays out of the log.
@@ -128,14 +118,31 @@ function _reportPlace(a, cells) {
 }
 
 /**
- * The (name, value) pairs of a batch write, from args n0, v0, n1, v1, ...
+ * The (name, value) pairs of a batch write, from args <prefix>n0, <prefix>v0, ...
  * @param {Object} args
+ * @param {string} [prefix]
  * @returns {Array<{name: string, value: string}>}
  */
-function _argPairs(args) {
+function _argPairs(args, prefix = '') {
   const out = [];
-  for (let i = 0; args[`n${i}`] !== undefined && i < API.MAX_PAIRS; i++) {
-    out.push({ name: args[`n${i}`], value: args[`v${i}`] === undefined ? '' : args[`v${i}`] });
+  for (let i = 0; args[`${prefix}n${i}`] !== undefined && i < API.MAX_PAIRS; i++) {
+    const value = args[`${prefix}v${i}`];
+    out.push({ name: args[`${prefix}n${i}`], value: value === undefined ? '' : value });
+  }
+  return out;
+}
+
+/**
+ * The students of saveStudents, from args t0 (teacher), k0 (key), g0 (gender),
+ * b0 (birth year), p0 (phone), t1, ...
+ * @param {Object} args
+ * @returns {Array<{teacher: string, key: string, gender: string, birthYear: string, phone: string}>}
+ */
+function _studentArgs(args) {
+  const out = [];
+  for (let i = 0; args[`t${i}`] !== undefined && i < API.MAX_PAIRS; i++) {
+    out.push({ teacher: args[`t${i}`], key: args[`k${i}`] || '', gender: args[`g${i}`] || '',
+      birthYear: args[`b${i}`] || '', phone: args[`p${i}`] || '' });
   }
   return out;
 }

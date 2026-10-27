@@ -177,29 +177,29 @@ function deleteHonor(ref, year, today) {
 }
 
 /**
- * Sets the amount of one honor from this month on (S-60); earlier months keep
- * theirs. Saved in the rates file, behind the pay password.
+ * The amount of one honor from this month on (S-60); earlier months keep theirs.
  * @param {*} amount - Pounds.
  * @param {Date} today
  * @returns {{from: string, amount: number}}
  */
-function saveHonorAmount(amount, today) {
+function _honorAmountRow(amount, today) {
   const text = normalizeDigitsAndText(String(amount === undefined ? '' : amount)).trim();
   const value = Number(text);
   if (text === '' || !(value >= 0)) throw new Error('مبلغ التكريم رقم لا يقل عن صفر.');
   const month = _monthOf(today) < PUBLIC_STATS.PAY_FROM ? PUBLIC_STATS.PAY_FROM : _monthOf(today);
-  const saved = { from: month, amount: Math.round(value * 100) / 100 };
-  _withScriptLock(() => {
-    const ss = _getOrCreateRatesFile();
-    let sheet = ss.getSheetByName(HONORS.AMOUNT_TAB);
-    if (!sheet) {
-      sheet = ss.insertSheet(HONORS.AMOUNT_TAB);
-      _styleHeader(sheet, HONORS.AMOUNT_HEADERS);
-    }
-    const index = _readBody(sheet).map(r => _dayText(r[0], 7)).indexOf(month);
-    const row = index === -1 ? sheet.getLastRow() + 1 : index + 2;
-    sheet.getRange(row, 1).setNumberFormat('@');
-    sheet.getRange(row, 1, 1, 2).setValues([[month, saved.amount]]);
-  });
-  return saved;
+  return { from: month, amount: Math.round(value * 100) / 100 };
+}
+
+/** Writes a checked honor amount in the rates file, behind the pay password. Inside the lock. */
+function _writeHonorAmount(saved) {
+  const ss = _getOrCreateRatesFile();
+  let sheet = ss.getSheetByName(HONORS.AMOUNT_TAB);
+  if (!sheet) {
+    sheet = ss.insertSheet(HONORS.AMOUNT_TAB);
+    _styleHeader(sheet, HONORS.AMOUNT_HEADERS);
+  }
+  const index = _readBody(sheet).map(r => _dayText(r[0], 7)).indexOf(saved.from);
+  const row = index === -1 ? sheet.getLastRow() + 1 : index + 2;
+  sheet.getRange(row, 1).setNumberFormat('@');
+  sheet.getRange(row, 1, 1, 2).setValues([[saved.from, saved.amount]]);
 }

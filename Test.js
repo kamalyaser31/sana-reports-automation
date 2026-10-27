@@ -957,7 +957,7 @@ function _testDashboard() {
     _eq(d.currency, 'EGP', 'one currency');
     _eq([d.pay, d.teachers.map(t => t.rate), d.rateLog], [null, ['', ''], []], 'no rates or pay without the pay password');
     const open = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true,
-      rateLog: [[new Date(2026, 9, 25, 10, 0), 'منى', RATE_LOG_ACTION, 'محمد نبيل: 100']] }, input));
+      rateLog: [[new Date(2026, 9, 25, 10, 0), 'منى', 'سعر الساعة', 'محمد نبيل: 100']] }, input));
     _eq([open.teachers.map(t => t.rate), open.unpriced], [[80, 100], []], 'rates per teacher once unlocked, none missing');
     _eq([open.pay.length, open.rateLog[0].details], [2, 'محمد نبيل: 100'], 'pay rows and rate log sent once unlocked');
     _eq([d.fixed, open.fixed], [null, [{ item: 'إدارة الأكاديمية', amount: 200 }]],
@@ -970,8 +970,8 @@ function _testDashboard() {
       'honors newest first; one in a frozen month cannot be removed');
     _eq([hd.honorAmount, d.honorAmount], [50, ''], 'honor amount once unlocked only');
     const fixedLog = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
-      { rateLog: [[new Date(2026, 9, 25, 9), 'منى', FIXED_LOG_ACTION, 'إدارة الأكاديمية: 900'], [new Date(2026, 9, 25, 8), 'منى', RATE_LOG_ACTION, 'محمد نبيل: 100']] }));
-    _eq(fixedLog.rateLog.map(e => e.action), [RATE_LOG_ACTION, FIXED_LOG_ACTION], 'rates log rows named by kind, newest first');
+      { rateLog: [[new Date(2026, 9, 25, 9), 'منى', 'مصروف ثابت', 'إدارة الأكاديمية: 900'], [new Date(2026, 9, 25, 8), 'منى', 'سعر الساعة', 'محمد نبيل: 100']] }));
+    _eq(fixedLog.rateLog.map(e => e.action), ['سعر الساعة', 'مصروف ثابت'], 'rates log rows named by kind, newest first');
     const withSheet = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
       { teachers: input.teachers.concat([{ name: 'رجاء لطفي', code: 'T004', students: [] }]) }));
     _eq(withSheet.teachers.map(t => t.name), ['أسماء علي', 'رجاء لطفي', 'محمد نبيل'],
@@ -1029,12 +1029,16 @@ function _testApi() {
     _eq(throws(() => parseApiRequest('{"action":"_getSecret"}')), 'error', 'unknown action refused');
     _eq(throws(() => parseApiRequest('{"action":"constructor"}')), 'error', 'built-in object names refused');
     _eq(throws(() => parseApiRequest('{"action":"data","year":"26"}')), 'error', 'bad year refused');
-    const req = parseApiRequest(JSON.stringify({ action: 'saveRates', token: 't', test: true, year: '2026',
+    const req = parseApiRequest(JSON.stringify({ action: 'savePay', token: 't', test: true, year: '2026',
       args: { teacher: ' سمية ', rate: 50, extra: { a: 1 } } }));
-    _eq(req, { action: 'saveRates', token: 't', test: true, year: '2026', args: { teacher: 'سمية', rate: '50' } },
+    _eq(req, { action: 'savePay', token: 't', test: true, year: '2026', args: { teacher: 'سمية', rate: '50' } },
       'args trimmed, control characters and objects dropped');
     _eq(_argPairs({ n0: 'أ', v0: '5', n1: 'ب', n3: 'د' }), [{ name: 'أ', value: '5' }, { name: 'ب', value: '' }],
       'batch pairs read in order, up to the first gap');
+    _eq([_argPairs({ rn0: 'أ', rv0: '5', fn0: 'ب' }, 'r'), _argPairs({ rn0: 'أ', fn0: 'ب' }, 'f')],
+      [[{ name: 'أ', value: '5' }], [{ name: 'ب', value: '' }]], 'each kind of a pay save read by its prefix (U-02)');
+    _eq(_studentArgs({ t0: 'سمية', k0: 'ك', g0: 'ذكر', t1: 'منى', k1: 'م', b1: '2015' }).map(s => [s.teacher, s.gender, s.birthYear]),
+      [['سمية', 'ذكر', ''], ['منى', '', '2015']], 'the students of one save read in order (U-03)');
     _eq(parseApiRequest('{"action":"data","test":"true"}').test, false, 'test mode only for a real true');
 
     _section('كلمة المرور والجلسة');
@@ -1080,10 +1084,8 @@ function _testApi() {
     const tok = apiLogin('منى', 'secret', 'secret', payCache).token;
     const sess = () => apiSession(tok, 'secret', payCache);
     _ok(!apiPayOpen(sess(), 'money'), 'pay closed after login');
-    _eq(throws(() => handleApiRequest({ action: 'saveRates', token: tok, year: '2026', args: { n0: 'x', v0: '5' } },
-      payDeps)), 'error', 'saving a rate needs the pay password, and keeps the session');
-    _eq(throws(() => handleApiRequest({ action: 'saveFixed', token: tok, year: '2026',
-      args: { n0: 'إدارة الأكاديمية', v0: '5' } }, payDeps)), 'error', 'a fixed expense needs the pay password too');
+    _eq(throws(() => handleApiRequest({ action: 'savePay', token: tok, year: '2026', args: { rn0: 'x', rv0: '5' } },
+      payDeps)), 'error', 'saving pay needs the pay password, and keeps the session');
     _eq(throws(() => apiUnlockPay(sess(), tok, 'secret', 'money', payCache)), 'error', 'login password does not open pay');
     _ok(!!apiSession(tok, 'secret', payCache), 'a wrong pay password keeps the admin logged in');
     apiUnlockPay(sess(), tok, 'money', 'money ', payCache);
@@ -1331,7 +1333,7 @@ function integrationTest_StudentsRegistry() {
     try { applyAlias({ teacher, from: hoda, to: `هدي ${tag}` }, '2026'); }
     catch (e) { sameNameError = e.message; }
     _ok(sameNameError !== '', 'alias between two spellings of one key is refused');
-    setStudentGender(teacher, studentNameKey(hamza), STUDENT_GENDER.FEMALE, '2026');
+    saveStudentsDetails([{ teacher, key: studentNameKey(hamza), gender: STUDENT_GENDER.FEMALE }], '2026');
   } finally {
     _TEST_MODE = false;
   }
@@ -1370,23 +1372,32 @@ function integrationTest_PublicStats() {
       .concat(sheetReports.map(h => h.teacher))));
     const oldTab = () => _findRegistry('2026').getSheetByName(REGISTRY.RATES_TAB);
     const registryRatesBefore = oldTab() ? JSON.stringify(_readBody(oldTab())) : '';
-    saveTeacherRates([{ teacher: teachers[0], rate: '٧٠' }]);
-    saveTeacherRates(teachers.map(teacher => ({ teacher, rate: 60 })));
+    const today = new Date();
+    savePay({ rates: [{ teacher: teachers[0], rate: '٧٠' }] }, '2026', today);
+    savePay({ rates: teachers.map(teacher => ({ teacher, rate: 60 })) }, '2026', today);
     const rates = readRateRows();
     _eq(oldTab() ? JSON.stringify(_readBody(oldTab())) : '', registryRatesBefore,
       'rates not written to the shared registry');
     _eq(rates.filter(r => r[0] === teachers[0]).map(r => r[1]), [60], 'rate updated in place, eastern digits read');
     refused = '';
-    try { saveTeacherRates([{ teacher: teachers[0], rate: '0' }]); } catch (e) { refused = e.message; }
+    try { savePay({ rates: [{ teacher: teachers[0], rate: '0' }] }, '2026', today); } catch (e) { refused = e.message; }
     _ok(refused !== '', 'zero rate refused');
     refused = '';
-    try { saveTeacherRates([{ teacher: teachers[0], rate: 55 }, { teacher: teachers[0], rate: '' }]); } catch (e) { refused = e.message; }
+    try { savePay({ rates: [{ teacher: teachers[0], rate: 55 }, { teacher: teachers[0], rate: '' }] }, '2026', today); } catch (e) { refused = e.message; }
     _ok(refused !== '' && readRates(readRateRows())[teachers[0]] === 60,
       'one bad rate in a batch saves none');
-    saveFixedExpenses([{ item: 'إدارة الأكاديمية', amount: '١٠٠' }]);
+    savePay({ fixed: [{ item: 'إدارة الأكاديمية', amount: '١٠٠' }] }, '2026', today);
     refused = '';
-    try { saveFixedExpenses([{ item: 'إيجار', amount: 10 }]); } catch (e) { refused = e.message; }
+    try { savePay({ fixed: [{ item: 'إيجار', amount: 10 }] }, '2026', today); } catch (e) { refused = e.message; }
     _ok(refused !== '', 'unknown fixed item refused');
+    refused = '';
+    try {
+      savePay({ rates: [{ teacher: teachers[0], rate: 80 }], fixed: [{ item: 'إدارة الأكاديمية', amount: 300 }],
+        honorAmount: '-5' }, '2026', today);
+    } catch (e) { refused = e.message; }
+    _ok(refused !== '' && readRates(readRateRows())[teachers[0]] === 60
+      && readFixedExpenses(readFixedRows())['إدارة الأكاديمية'] === 100,
+      'a bad honor amount saves neither the rate nor the fixed expense (U-02)');
     const fixed = readFixedExpenses(readFixedRows());
     _eq(fixed['إدارة الأكاديمية'], 100, 'fixed expense saved in the rates file, eastern digits read');
 
@@ -1449,16 +1460,16 @@ function integrationTest_Dashboard() {
 
     const withExpense = dashboardSaveExpense('2026-08', '120', '2026');
     _ok(withExpense.expenses.some(e => e.month === '2026-08' && e.amount === 120), 'expense saved from the dashboard');
-    const withRate = _withPay(true, () => dashboardSaveRates([{ teacher, rate: '٥٠' }], '2026'));
+    const withRate = _withPay(true, () => dashboardSavePay({ rates: [{ teacher, rate: '٥٠' }] }, '2026').data);
     _eq(withRate.teachers.find(t => t.name === teacher).rate, 50, 'rate saved from the dashboard');
     _ok(withRate.pay.filter(p => p.teacher === teacher).every(p => p.rate === 50), 'pay uses the new rate');
 
     const key = studentNameKey(right);
-    const g = dashboardSetGender(teacher, key, STUDENT_GENDER.MALE, '2026');
+    const g = dashboardSaveStudents([{ teacher, key, gender: STUDENT_GENDER.MALE }], '2026').data;
     _eq(g.teachers.find(t => t.name === teacher).students.find(s => s.key === key).gender, STUDENT_GENDER.MALE, 'gender saved from the dashboard');
 
     let err = '';
-    try { dashboardSetGender(teacher, 'لا_يوجد', STUDENT_GENDER.MALE, '2026'); } catch (e) { err = e.message; }
+    try { dashboardSaveStudents([{ teacher, key: 'لا_يوجد', gender: STUDENT_GENDER.MALE }], '2026'); } catch (e) { err = e.message; }
     _has(err, 'لم يوجد الطالب', 'unknown student explained');
   } finally {
     _TEST_MODE = false;
@@ -1485,12 +1496,15 @@ function integrationTest_StudentDetails() {
   submit('20-12-2025');
   _TEST_MODE = true;
   try {
-    const saved = dashboardSetDetails(teacher, studentNameKey(student), { birthYear: '٢٠١٦', phone: `00${phone.slice(1)}` }, '2025');
+    const one = { teacher, key: studentNameKey(student), gender: STUDENT_GENDER.MALE };
+    const saved = dashboardSaveStudents([Object.assign({ birthYear: '٢٠١٦', phone: `00${phone.slice(1)}` }, one)], '2025').data;
     _eq([find(saved).birthYear, find(saved).phone], [2016, phone], 'details saved and normalized');
     let err = '';
-    try { dashboardSetDetails(teacher, studentNameKey(student), { birthYear: '2016', phone: '0100' }, '2025'); }
+    try { dashboardSaveStudents([Object.assign({ birthYear: '2016', phone: '0100' }, one)], '2025'); }
     catch (e) { err = e.message; }
     _has(err, 'مفتاح الدولة', 'bad phone explained');
+    _has(err, student, 'the refusal names the student (U-03)');
+    _eq(find(_getDashboardData('2025')).phone, phone, 'a refused save writes nothing');
   } finally {
     _TEST_MODE = false;
   }
@@ -1544,21 +1558,24 @@ function integrationTest_Api() {
 
   _eq([data.data.pay, data.data.payOpen], [null, false], 'no pay before the pay password');
   let refused = '';
-  try { call('saveRates', { n0: teacher, v0: '65' }, login.token); } catch (e) { refused = e.message; }
+  try { call('savePay', { rn0: teacher, rv0: '65' }, login.token); } catch (e) { refused = e.message; }
   _has(refused, 'افتح الرواتب', 'rate refused before the pay password');
 
   const opened = call('unlockPay', { password: deps.payPassword }, login.token);
   _ok(opened.data.payOpen && Array.isArray(opened.data.pay), 'pay password opens rates and pay');
-  const saved = call('saveRates', { n0: teacher, v0: '65' }, login.token);
+  const saved = call('savePay', { rn0: teacher, rv0: '65', fn0: 'إدارة الأكاديمية', fv0: '200' }, login.token);
   _eq(saved.data.teachers.find(t => t.name === teacher).rate, 65, 'rate saved through the API');
-  _eq(saved.data.rateLog[0].name + '|' + saved.data.rateLog[0].details, `مختبر ${tag}|${teacher}: 65`,
-    'rate change logged with the name typed at login');
+  _eq([saved.data.rateLog[0].name, saved.data.rateLog[0].action, saved.data.rateLog[0].details],
+    [`مختبر ${tag}`, PAY_LOG_ACTION, `سعر الساعة: ${teacher}: 65؛ مصروف ثابت: إدارة الأكاديمية: 200`],
+    'one log row for the pay save, with the name typed at login');
   const after = call('data', {}, login.token).data;
   _eq(after.rateLog[0].name, `مختبر ${tag}`, 'rate log row written to the rates file');
-  _ok(!after.log.some(e => e.action === RATE_LOG_ACTION), 'no rate row in the shared edit log');
+  _ok(!after.log.some(e => e.action === PAY_LOG_ACTION), 'no pay row in the shared edit log');
 
-  call('setGender', { teacher, key: studentNameKey(`منير ${tag}`), gender: STUDENT_GENDER.MALE, label: `منير ${tag}` }, login.token);
-  _eq(call('data', {}, login.token).data.log[0].name, `مختبر ${tag}`, 'other writes logged in the registry');
+  call('saveStudents', { t0: teacher, k0: studentNameKey(`منير ${tag}`), g0: STUDENT_GENDER.MALE }, login.token);
+  const logged = call('data', {}, login.token).data.log[0];
+  _eq([logged.name, logged.action], [`مختبر ${tag}`, 'بيانات الطلاب'], 'other writes logged in the registry');
+  _has(logged.details, `منير ${tag}`, 'the log row names who changed');
   _eq(call('lockPay', {}, login.token).data.pay, null, 'lock hides pay again');
   const refreshed = call('refreshReports', {}, login.token).data;
   _ok(Array.isArray(refreshed.reports) && refreshed.reports.length > 0, 'refresh reads the teachers\' sheets again');
@@ -1676,10 +1693,10 @@ function integrationTest_Honors() {
   _eq([student(added).honors, mine.reason, mine.editable], [1, 'ختم جزء', true], 'honor added and counted for the student');
   _eq([added.log[0].action, added.log[0].name], ['تكريم', `مختبر ${tag}`], 'honor logged with the admin');
 
-  _has(refusal('saveHonorAmount', { amount: '75' }), 'افتح الرواتب', 'the amount needs the pay password');
+  _has(refusal('savePay', { honorAmount: '75' }), 'افتح الرواتب', 'the amount needs the pay password');
   call('unlockPay', { password: deps.payPassword }, token);
-  const priced = call('saveHonorAmount', { amount: '٧٥' }, token).data;
-  _eq([priced.honorAmount, priced.rateLog[0].action], [75, 'مبلغ التكريم'], 'amount saved in the rates file and logged there');
+  const priced = call('savePay', { honorAmount: '٧٥' }, token).data;
+  _eq([priced.honorAmount, priced.rateLog[0].action], [75, PAY_LOG_ACTION], 'amount saved in the rates file and logged there');
 
   // A name correction carries the honor to the right name (F-03).
   const renamed = call('applyAlias', { teacher, from: `نور ${tag}`, to: `نورة ${tag}` }, token).data;
