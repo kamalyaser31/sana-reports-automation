@@ -1505,6 +1505,15 @@ function integrationTest_StudentDetails() {
     _has(err, 'مفتاح الدولة', 'bad phone explained');
     _has(err, student, 'the refusal names the student (U-03)');
     _eq(find(_getDashboardData('2025')).phone, phone, 'a refused save writes nothing');
+    // A phone typed by hand in the sheet does not block a gender change.
+    const tab = _findRegistry('2025').getSheetByName(_teacherTabName(teacher));
+    const row = _readBody(tab).findIndex(r => (rowToStudent(r) || {}).key === studentNameKey(student)) + 2;
+    const phoneCol = STUDENT_SYSTEM_COLUMNS + 1 + studentDetailColumns(_headerRow(tab)).phone;
+    tab.getRange(row, phoneCol).setValue('0100');
+    const regendered = dashboardSaveStudents([Object.assign({}, one, { gender: STUDENT_GENDER.FEMALE, birthYear: '2016', phone: '0100' })], '2025').data;
+    _eq([find(regendered).gender, tab.getRange(row, phoneCol).getValues()[0][0]], [STUDENT_GENDER.FEMALE, '0100'],
+      'only the changed field is checked and written (U-03)');
+    tab.getRange(row, phoneCol).setValue(phone);
   } finally {
     _TEST_MODE = false;
   }

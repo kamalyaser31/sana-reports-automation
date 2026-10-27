@@ -665,8 +665,9 @@ function _ensureDetailColumns(sheet) {
 
 /**
  * Saves the gender, birth year and phone of the students changed on the page
- * (U-03), each found by key in column M. Every value is checked before any is
- * written, and each teacher tab is read once. Empty details clear the cell.
+ * (U-03), each found by key in column M. Only the fields that differ from the
+ * sheet are checked and written, all checked before any is written, and each
+ * teacher tab is read once. Empty details clear the cell.
  * @param {Array<{teacher: string, key: string, gender: string, birthYear: *, phone: *}>} list
  * @param {string} [year]
  * @returns {Array<{teacher: string, name: string, gender: string, birthYear: number|string, phone: string}>}
@@ -682,27 +683,44 @@ function saveStudentsDetails(list, year) {
       if (!tab) {
         const sheet = ss.getSheetByName(_teacherTabName(item.teacher));
         if (!sheet) throw new Error(`لا تبويب للمعلم «${item.teacher}» في السجل.`);
-        tab = tabs[item.teacher] = { sheet, students: _readBody(sheet).map(rowToStudent) };
+        const body = _readBody(sheet);
+        tab = tabs[item.teacher] = { sheet, body, students: body.map(rowToStudent), cols: studentDetailColumns(_headerRow(sheet)) };
       }
       const index = tab.students.findIndex(st => st && st.key === item.key);
       if (index === -1) throw new Error('لم يوجد الطالب؛ لعل صفه دُمج. حدّث الصفحة.');
       const name = tab.students[index].name;
+      const row = tab.body[index];
+      const text = v => String(v === undefined || v === null ? '' : v).trim();
+      const cell = f => (tab.cols[f] === -1 ? '' : text(row[STUDENT_SYSTEM_COLUMNS + tab.cols[f]]));
+      // Only what the admin changed is checked and written: an old cell typed by
+      // hand must not refuse the save of another field.
+      const change = {};
       try {
-        if (item.gender !== STUDENT_GENDER.MALE && item.gender !== STUDENT_GENDER.FEMALE) throw new Error('الجنس ذكر أو أنثى.');
-        return { teacher: item.teacher, name, row: index + 2, gender: item.gender,
-          birthYear: normalizeBirthYear(item.birthYear, today), phone: normalizePhone(item.phone) };
+        if (text(item.gender) !== text(row[1])) {
+          if (item.gender !== STUDENT_GENDER.MALE && item.gender !== STUDENT_GENDER.FEMALE) throw new Error('الجنس ذكر أو أنثى.');
+          change.gender = item.gender;
+        }
+        if (text(item.birthYear) !== cell('birthYear')) change.birthYear = normalizeBirthYear(item.birthYear, today);
+        if (text(item.phone) !== cell('phone')) change.phone = normalizePhone(item.phone);
       } catch (error) {
         throw new Error(`${name} عند ${item.teacher}: ${error.message}`);
       }
+      return {
+        teacher: item.teacher, name, row: index + 2, change,
+        gender: 'gender' in change ? change.gender : text(row[1]),
+        birthYear: 'birthYear' in change ? change.birthYear : cell('birthYear'),
+        phone: 'phone' in change ? change.phone : cell('phone'),
+      };
     });
     Object.keys(tabs).forEach(teacher => {
       const sheet = tabs[teacher].sheet;
-      const cols = _ensureDetailColumns(sheet);
-      saved.filter(s => s.teacher === teacher).forEach(s => {
-        sheet.getRange(s.row, 2).setValue(s.gender);
-        sheet.getRange(s.row, STUDENT_SYSTEM_COLUMNS + 1 + cols.birthYear).setValue(s.birthYear);
+      const mine = saved.filter(s => s.teacher === teacher);
+      const cols = mine.some(s => 'birthYear' in s.change || 'phone' in s.change) ? _ensureDetailColumns(sheet) : null;
+      mine.forEach(s => {
+        if ('gender' in s.change) sheet.getRange(s.row, 2).setValue(s.gender);
+        if ('birthYear' in s.change) sheet.getRange(s.row, STUDENT_SYSTEM_COLUMNS + 1 + cols.birthYear).setValue(s.birthYear);
         // Text, or Sheets reads "+20…" as a number and drops the plus sign.
-        sheet.getRange(s.row, STUDENT_SYSTEM_COLUMNS + 1 + cols.phone).setNumberFormat('@').setValue(s.phone);
+        if ('phone' in s.change) sheet.getRange(s.row, STUDENT_SYSTEM_COLUMNS + 1 + cols.phone).setNumberFormat('@').setValue(s.phone);
       });
     });
     return saved.map(({ teacher, name, gender, birthYear, phone }) => ({ teacher, name, gender, birthYear, phone }));
