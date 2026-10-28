@@ -1408,7 +1408,8 @@ function sendTelegramNotification(data) {
   if (!CONFIG.TELEGRAM.ENABLED || _TEST_MODE) return false;
 
   const botToken = CONFIG.TELEGRAM.BOT_TOKEN;
-  const chatId   = CONFIG.TELEGRAM.CHAT_ID;
+  // A chat id typed without quotes in Config.local.js is a number, and the -100 retry below needs a string.
+  const chatId   = String(CONFIG.TELEGRAM.CHAT_ID || '');
 
   if (!botToken || !chatId) {
     console.warn('[TELEGRAM WARNING] Bot token or Chat ID is missing. Notification skipped.');
@@ -1485,7 +1486,8 @@ function sendTelegramNotification(data) {
 }
 
 /**
- * Escapes HTML special characters for Telegram HTML parse mode.
+ * Escapes HTML special characters for Telegram HTML parse mode, quotes too, since
+ * the report link is written inside an href attribute.
  * @param {string} str
  * @returns {string}
  */
@@ -1494,6 +1496,7 @@ function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
