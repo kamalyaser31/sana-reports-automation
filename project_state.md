@@ -1,6 +1,6 @@
 # حالة المشروع (Project State) — sana-reports-automation
 
-**الإصدار:** `5.23.0` في `master`، والنشر المرقّم على النسخة 33. والسجل يعمل منذ يوم التثبيت 2026-10-25.
+**الإصدار:** `5.23.0` في `master`، والنشر المرقّم على النسخة 34. والسجل يعمل منذ يوم التثبيت 2026-10-25.
 **تاريخ التحديث:** `2026-10-28`
 **المستودع:** `https://github.com/kamalyaser31/sana-reports-automation` (خاص)
 **التاريخ:** ما سبق في [CHANGELOG.md](./CHANGELOG.md)، والقرارات S-xx في [PLAN_STUDENTS_SHEET.md](./PLAN_STUDENTS_SHEET.md).
