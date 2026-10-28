@@ -301,6 +301,26 @@ function _testValidate() {
     _eq(v2.teacherName,   CONFIG.FALLBACKS.TEACHER_NAME, 'fallback teacher name');
     _eq(v2.reportText,    CONFIG.FALLBACKS.REPORT_TEXT,  'fallback report text');
 
+    _section('تنبيه رسالة Telegram');
+    const inAugust = new Date(2026, 8, 3);
+    _eq(reportProblems(v1, inAugust), [], 'a full report in an open month has no problem');
+    _eq(reportProblems(v2, inAugust), ['ينقص من ترويسة التقرير: نوع الحلقة، تاريخ التقرير، عدد الطلاب'],
+      'a report without the app header names the missing lines');
+    _eq(reportProblems(Object.assign({}, v1, { sheetFailed: true }), new Date(2026, 8, 7)),
+      ['لم يُكتب في شيت المعلم، فأضِفه باليد', 'شهر ثابت: يدخل الراتب لا الملف العام'],
+      'a failed sheet write, and August after its freeze on 6 September');
+
+    _section('الردود التي لم تُعالَج');
+    const at = h => new Date(2026, 9, 26, h);
+    const responses = [{ id: 'a', time: at(9) }, { id: 'b', time: at(10) }, { id: 'c', time: at(11) },
+      { id: 'd', time: new Date(2026, 9, 27, 1) }];
+    const missed = missedResponses(responses, { saved: new Set(['b', 'c']), done: new Set(['b']) },
+      at(0), new Date(2026, 9, 27), at(10));
+    _eq([missed.notSaved, missed.cutOff].map(list => list.map(r => r.id)), [[], ['c']],
+      'yesterday only, after marking began: c was saved and cut off, b finished');
+    _eq(missedResponses(responses, { saved: new Set(), done: new Set() }, at(0), new Date(2026, 9, 27), at(0))
+      .notSaved.map(r => r.id), ['a', 'b', 'c'], 'a response with no mark was not saved');
+
     _section('معلم غير مُدرج في CONFIG');
     const rawUnknown = { ...rawOk, rawTeacherName: 'معلم جديد' };
     const v4 = validateFormData(rawUnknown, 'uuid-4', new Date(2026, 7, 29));
@@ -638,6 +658,13 @@ function _testPublicStats() {
     const academyOf = (stats, m) => stats.monthly.find(r => r[0] === m && r[2] === PUBLIC_STATS.ACADEMY);
     _eq([academyOf(listed, '2026-09')[7], academyOf(listed, '2026-10')[7]], [1, 3],
       'September counts only its listed teachers; October counts everyone (S-54)');
+    const plain = _sampleStatsInput(new Date(2026, 9, 20));
+    const handHours = computePublicStats(Object.assign(plain, {
+      sheetReports: plain.sheetReports.concat([
+        { teacher: 'محمد نبيل', date: new Date(2026, 9, 1), month: '2026-10', category: '', minutes: 60, attendance: 0 },
+      ]) }));
+    _eq([7, 8, 14, 16].map(i => academyOf(handHours, '2026-10')[i]), [2, 2.5, 1020, 408],
+      'hours without students add pay, not a halaqa or its hours, and the hour cost is over the hours shown');
     _ok(!isCountedReport({ teacher: CONFIG.FALLBACKS.TEACHER_NAME, month: '2026-10', minutes: 60, duplicate: false }),
       'a report without a teacher\'s name is not counted (S-57)');
     const sample = _sampleStatsInput(new Date(2026, 9, 20));
@@ -982,6 +1009,36 @@ function _testApi() {
   });
 }
 
+// ─── رسائل أولياء الأمور (Parents.js) ───────────────────────────────────────
+
+function _testParents() {
+  _suite('studentSections / parentMessages / reportPhones', () => {
+    const reportText = _sampleReport([
+      { name: 'حمزة علاء', hifz: 'سورة نوح ٢١-٢٨' },
+      { name: 'هدى مصطفى', female: true },
+      { name: 'بدون اسم' },
+    ]);
+    const sections = studentSections(reportText);
+    _eq(sections.map(s => s.name), ['حمزة علاء', 'هدى مصطفى'], 'one section per named student');
+    _ok(sections.every(s => s.lines.every(l => !/━/.test(l))), 'separators dropped');
+    _ok(sections.every(s => s.lines.every(l => !/نسأل الله/.test(l))), 'report footer left out');
+
+    const report = _sampleContext(23, [{ name: 'حمزه علاء' }, { name: 'هدى مصطفى', female: true }]);
+    const students = applyReportToStudents([], report, {}).students;
+    students.forEach(s => { s.extra = s.key === studentNameKey('حمزة علاء') ? ['', '00201001234567'] : ['', 'رقم خطأ']; });
+    const phones = reportPhones(students, 1, report, {});
+    _eq(phones, { [studentNameKey('حمزه علاء')]: '+201001234567' }, 'phone found, malformed phone skipped');
+
+    const data = { reportText, reportDateText: 'الجمعة، ٢٣ أكتوبر ٢٠٢٦' };
+    const messages = parentMessages(data, phones);
+    _ok(messages[0].fits && messages[0].link.indexOf('https://wa.me/201001234567?text=') === 0, 'short section: link carries the text');
+    _has(messages[0].text, 'التاريخ: الجمعة، ٢٣ أكتوبر ٢٠٢٦', 'date added');
+    _eq(messages[1].phone, '', 'student without phone has no link');
+    const long = parentMessages({ reportText: _sampleReport([{ name: 'حمزة علاء', hifz: 'سورة البقرة '.repeat(40) }]) }, phones);
+    _eq([long[0].fits, long[0].link], [false, 'https://wa.me/201001234567'], 'long section: link opens the chat only');
+  });
+}
+
 // ============================================================================
 // ③ تشغيل جميع اختبارات الوحدة
 // ============================================================================
@@ -1007,6 +1064,7 @@ function runAllUnitTests() {
   _testDashboard();
   _testApi();
   _testStudentDetails();
+  _testParents();
 
   _report('UNIT TESTS');
 }
@@ -1065,6 +1123,16 @@ function integrationTest_DuplicateDetection() {
       .filter(r => _slotDateKey(r[0]) === '29-08-2026' && r[1] === 'تجويد');
     const counted = slot.map((r, i) => (String(r[5]).indexOf(DUPLICATE_MARK) === 0 ? -1 : i)).filter(i => i !== -1);
     _eq(counted, [slot.length - 1], 'only the last report of the halaqa is counted');
+    const links = _readTab(sheet, 'محمد نبيل', '2026-08').map(r => r.link);
+    _eq(links.slice(-2), [first.fileUrl, second.fileUrl], 'each row links to its own report file');
+    const monthFolder = teacherFolder.getFoldersByName('08 - أغسطس').next();
+    const text = name => _firstNotTrashed(monthFolder.getFilesByName(name)).getBlob().getDataAsString('UTF-8');
+    const base = '29-08-2026_تجويد_محمد نبيل';
+    const nameAt = n => (n ? `${base} (${n}).md` : `${base}.md`);
+    _ok(text(nameAt(second.duplicateIndex - 1)).indexOf(`${SUPERSEDED_NOTE} ${second.fileUrl}`) === 0,
+      'the earlier file names its replacement');
+    _ok(text(nameAt(second.duplicateIndex)).indexOf('# تجويد — محمد نبيل — 29-08-2026') === 0,
+      'the new file opens with its heading');
   } finally {
     _TEST_MODE = false;
   }

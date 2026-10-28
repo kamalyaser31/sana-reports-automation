@@ -24,6 +24,10 @@ const LOCAL_SECRETS = {
   // معرّف المجموعة / القناة في تيليجرام
   TELEGRAM_CHAT_ID:   '',
 
+  // محادثة خاصة مع البوت تصلها تقارير أولياء الأمور بأزرار WhatsApp؛ فارغة = معطّلة.
+  // يضغط صاحبها Start عند البوت أولاً.
+  TELEGRAM_PARENTS_CHAT_ID: '',
+
   // معرّف مجلد Drive منفصل لاختبارات التكامل (runAllTests) — لا تضع هنا مجلد الإنتاج
   TEST_ROOT_FOLDER_ID: '',
 };

@@ -140,11 +140,13 @@ function readExpenses(rows) {
  * @param {Array<Array>} rows
  * @param {string} teacher - Teacher tab name.
  * @param {string} month - "yyyy-mm" of the tab.
+ * @param {Array<string>} [links] - Each row's link on its halaqa label: the report file.
  * @returns {Array<Object>} teacher, date, month, category, minutes, attendance,
  *   duplicate, the cells as shown (dateText, session, duration, students, notes),
- *   and the sheet row with its stamp, for an edit from the dashboard (S-59).
+ *   the report link ('' without an https one), and the sheet row with its stamp,
+ *   for an edit from the dashboard (S-59).
  */
-function teacherSheetReports(rows, teacher, month) {
+function teacherSheetReports(rows, teacher, month, links) {
   const [y, m] = month.split('-').map(Number);
   const text = _cellText;
   const out = [];
@@ -159,6 +161,7 @@ function teacherSheetReports(rows, teacher, month) {
       attendance: Number(normalizeDigitsAndText(text(r[4]))) || 0,
       duplicate: text(r[5]).indexOf('(تقرير مكرر)') === 0,
       dateText: text(r[0]), session: text(r[1]), duration: d, students: text(r[4]), notes: text(r[5]),
+      link: /^https:\/\//.test((links && links[i]) || '') ? links[i] : '',
       row: i + 2, stamp: reportRowStamp(r) });
   });
   return out;
@@ -270,12 +273,14 @@ function computePublicStats(input) {
   // Halaqat are the teachers' sheets' (S-53); students the registry's, as the
   // sheets hold counts, not names. The registry's first day is when students
   // began to be counted.
-  const halaqat = (input.sheetReports || []).filter(isCountedReport);
+  const counted = (input.sheetReports || []).filter(isCountedReport);
+  // A row without students is hours typed by hand, not a halaqa: pay only.
+  const halaqat = counted.filter(h => h.attendance > 0);
   const studentDays = [].concat(...input.teachers.map(t => [].concat(...t.students
     .map(s => Object.keys(s.slots).map(k => k.split('|')[0]))))).sort();
   const studentsFrom = studentDays.length ? studentDays[0] : '';
   const expenses = readExpenses(input.expenses);
-  const pay = computeTeacherPay(halaqat, readRates(input.rates));
+  const pay = computeTeacherPay(counted, readRates(input.rates));
   const teachers = input.teachers.slice().sort((a, b) => (a.code > b.code ? 1 : -1));
   const codeOf = {};
   teachers.forEach(t => { codeOf[t.name] = t.code; });
@@ -386,8 +391,9 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
     const total = month < PUBLIC_STATS.PAY_FROM || monthPay.some(p => p.pay === '') || honorAmount === '' ? ''
       : monthPay.reduce((a, p) => a + p.pay, 0) + fixedTotal + (expenses[month] ? expenses[month].amount : 0)
         + monthHonors.length * honorAmount;
-    // The cost of an hour is over the teachers' own sheets' hours, as their pay is (S-50).
-    const hours = monthPay.reduce((a, p) => a + p.hours, 0);
+    // Over the teaching hours this row shows, so a donor can check it; the pay
+    // hours would add hours typed by hand without students.
+    const hours = hp.hours;
     rows.push([month, since, PUBLIC_STATS.ACADEMY].concat(sp.cols).concat(hp.cols).concat([
       new Set(monthHalaqat.map(h => h.teacher)).size,
       total,
@@ -557,8 +563,10 @@ function _tabMonth(tabName, year) {
 }
 
 function _readTab(sheet, teacher, month) {
-  if (sheet.getLastRow() < 2) return [];
-  return teacherSheetReports(sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues(), teacher, month);
+  const n = sheet.getLastRow() - 1;
+  if (n < 1) return [];
+  const links = sheet.getRange(2, 2, n, 1).getRichTextValues().map(r => (r[0] && r[0].getLinkUrl()) || '');
+  return teacherSheetReports(sheet.getRange(2, 1, n, 6).getDisplayValues(), teacher, month, links);
 }
 
 // ============================================================================
@@ -800,8 +808,9 @@ function readExpenseMonths(rows) {
 }
 
 /**
- * Nightly job (S-21): pending aliases, then the public file. In the first days
- * of January the previous year is refreshed too, until its December freezes.
+ * Nightly job (S-21): pending aliases, then the public file, then yesterday's
+ * missed form responses. In the first days of January the previous year is
+ * refreshed too, until its December freezes.
  * @param {Date} [today]
  */
 function nightlyStatsJob(today) {
@@ -815,6 +824,14 @@ function nightlyStatsJob(today) {
     try { refreshPublicStats(y, now); }
     catch (error) { _safeLogToDrive('NIGHTLY', now, `refreshPublicStats ${y} failed: ${error.message}`, error.stack); }
   });
+
+  // A failed check would hide missed reports, so it is mailed, not only logged;
+  // a failed mail throws, and the job fails where Google's own email reports it.
+  try { checkMissedResponses(now); }
+  catch (error) {
+    _safeLogToDrive('NIGHTLY', now, `checkMissedResponses failed: ${error.message}`, error.stack);
+    _mailAdmin('فشل فحص التقارير الليلي', [`لم يُفحص هل فات تقريرٌ أمس: ${error.message}`]);
+  }
 }
 
 /**

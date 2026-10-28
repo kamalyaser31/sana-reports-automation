@@ -211,26 +211,90 @@ function executeSubmissionPipeline(e, executionId, startTime) {
 
   verifySavedFile(saveResult.file);
 
+  // The report is safe in Drive: the nightly check must not count it as missed.
+  // Non-fatal, as a lost mark only brings a false alarm.
+  try {
+    markResponse(RESPONSE_MARKS.SAVED, rawData.responseId);
+  } catch (markError) {
+    _safeLogToDrive(executionId, startTime, `Saved mark failed: ${markError.message}`, markError.stack);
+  }
+
   // Sheets failure is non-fatal: the Markdown file is already saved.
   try {
     validatedData.replacedEarlier = recordToTeacherSheet(driveTarget.yearTeacherFolder, validatedData).replaced > 0;
   } catch (sheetError) {
     console.error(`[SHEET WARNING] [ExecutionID: ${executionId}] Could not append to teacher sheet:`, sheetError.message);
     _safeLogToDrive(executionId, startTime, `Google Sheets Warning: ${sheetError.message}`, sheetError.stack);
+    validatedData.sheetFailed = true;
+  }
+
+  // Only when the sheet counted this report in place of the earlier one (S-58);
+  // non-fatal, as the note only helps whoever opens the old file.
+  if (validatedData.replacedEarlier && saveResult.earlier) {
+    try {
+      markSupersededFile(saveResult.earlier, validatedData.fileUrl);
+    } catch (markError) {
+      _safeLogToDrive(executionId, startTime, `Superseded note failed: ${markError.message}`, markError.stack);
+    }
   }
 
   // The students registry is non-fatal too; recordStudentsSafely logs its own failures.
   if (CONFIG.STUDENTS_REGISTRY.ENABLED || _TEST_MODE) {
     const registry = recordStudentsSafely(driveTarget.yearFolder, validatedData, executionId, startTime);
-    if (registry) validatedData.newStudents = registry.newStudents;
+    if (registry) {
+      validatedData.newStudents = registry.newStudents;
+      validatedData.parentPhones = registry.phones;
+    } else {
+      validatedData.registryFailed = true;
+    }
+  }
+
+  // A deleted nightly trigger stops the missed-report check with no error to report.
+  try {
+    validatedData.nightlyMissing = !_TEST_MODE
+      && !ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'nightlyStatsJob');
+  } catch (triggerError) {
+    _safeLogToDrive(executionId, startTime, `Trigger check failed: ${triggerError.message}`, triggerError.stack);
   }
 
   // Telegram is non-fatal: log failures to Drive so they are not silently lost.
+  let delivered = false;
+  let telegramFailure = '';
   try {
-    sendTelegramNotification(validatedData);
+    delivered = sendTelegramNotification(validatedData);
   } catch (telegramError) {
+    telegramFailure = telegramError.message;
     console.warn(`[TELEGRAM WARNING] [ExecutionID: ${executionId}]`, telegramError.message);
     _safeLogToDrive(executionId, startTime, `Telegram Notification Failed: ${telegramError.message}`, telegramError.stack);
+  }
+
+  // Parent messages are a convenience: a failure is logged, and the report stands.
+  try {
+    sendParentMessages(validatedData, validatedData.registryFailed ? null : (validatedData.parentPhones || {}));
+  } catch (parentsError) {
+    _safeLogToDrive(executionId, startTime, `Parent messages failed: ${parentsError.message}`, parentsError.stack);
+  }
+
+  // Email takes the alert Telegram could not carry: a failed message, or problems
+  // with Telegram off.
+  const problems = reportProblems(validatedData, new Date());
+  let unreported = false;
+  if (telegramFailure || (!delivered && problems.length)) {
+    try {
+      sendReportProblemEmail(validatedData, problems, telegramFailure);
+    } catch (mailError) {
+      unreported = true;
+      _safeLogToDrive(executionId, startTime, `Problem email failed: ${mailError.message}`, mailError.stack);
+    }
+  }
+
+  // Left unmarked when no alert went out, so the nightly check reports it.
+  if (!unreported) {
+    try {
+      markResponse(RESPONSE_MARKS.DONE, rawData.responseId);
+    } catch (markError) {
+      _safeLogToDrive(executionId, startTime, `Done mark failed: ${markError.message}`, markError.stack);
+    }
   }
 
   console.log(`[PIPELINE SUCCESS] [ExecutionID: ${executionId}] Saved: ${saveResult.file.getName()} in ${driveTarget.monthFolder.getName()}`);
@@ -333,6 +397,8 @@ function extractFormData(e) {
     rawReportText,
     rawAdminNotes:       getFieldCaseInsensitive(formFields, CONFIG.FIELDS.ADMIN_NOTES),
     bodyMetadata,
+    // A form response carries its id, for the nightly check of missed responses.
+    responseId:          e.response && typeof e.response.getId === 'function' ? e.response.getId() : '',
     submissionTimestamp: formFields['Timestamp'] || new Date().toISOString(),
   };
 }
@@ -770,58 +836,49 @@ function _sessionLabel(data) {
 }
 
 /**
- * Generates structured Markdown text with YAML frontmatter and report body.
+ * The report file, for a person reading it in Drive: one heading, one line of
+ * facts, the teacher's text as sent, the admin notes, and a trace line last.
+ * Nothing parses it; the numbers live in the teacher's sheet.
  * @param {Object} data - Validated data.
- * @returns {string} Complete Markdown document string.
+ * @returns {string}
  */
 function generateMarkdownContent(data) {
-  const yamlFrontmatter = [
-    '---',
-    `report_id: ${JSON.stringify(data.executionId)}`,
-    `submission_timestamp: ${JSON.stringify(data.submissionTimestamp)}`,
-    `teacher_name: ${JSON.stringify(data.teacherName)}`,
-    `teacher_id: ${JSON.stringify(data.teacherId)}`,
-    `session_type: ${JSON.stringify(data.sessionType)}`,
-    `session_id: ${JSON.stringify(data.sessionId)}`,
-    `hala_num: ${JSON.stringify(data.halaNum || '')}`,
-    `student_category: ${JSON.stringify(data.studentCategory)}`,
-    `report_date_text: ${JSON.stringify(data.reportDateText || data.submissionDateFormatted)}`,
-    `duration_hours: ${data.durationHours}`,
-    `duration_minutes: ${data.durationMinutes}`,
-    `duration_time: ${JSON.stringify(data.durationTime)}`,
-    `duration_formatted: ${JSON.stringify(data.durationFormatted)}`,
-    `student_count: ${data.studentCount !== null ? data.studentCount : 'null'}`,
-    `validation_status: ${JSON.stringify(data.validationStatus)}`,
-    `missing_fields: ${JSON.stringify(data.missingFields)}`,
-    '---',
-  ].join('\n');
-
-  const bodyContent = [
-    `# تقرير حلقة: ${data.sessionType} — ${data.teacherName}`,
+  const count = data.studentCount !== null ? data.studentCount : 'غير محدد';
+  const gaps = data.missingFields.slice();
+  if (data.validationErrors.length) gaps.push('المدة غير صحيحة');
+  return [
+    `# ${_sessionLabel(data)} — ${data.teacherName} — ${data.reportDateText || data.submissionDateFormatted}`,
     '',
-    `- **اسم المعلم:** ${data.teacherName} (\`${data.teacherId}\`)`,
-    `- **نوع الحلقة:** ${_sessionLabel(data)} (\`${data.sessionId}\`)`,
-    `- **فئة الطلاب:** ${data.studentCategory}`,
-    `- **تاريخ التقرير:** ${data.reportDateText || data.submissionDateFormatted}`,
-    `- **مدة الحصة:** ${data.durationFormatted} (\`${data.durationTime}\`)`,
-    `- **عدد الطلاب:** ${data.studentCount !== null ? data.studentCount : 'غير محدد'}`,
-    `- **حالة التحقق:** ${data.validationStatus}`,
-    '',
-    '---',
+    `المدة: ${data.durationFormatted}، والطلاب: ${count}، والفئة: ${data.studentCategory}`,
+    ...(gaps.length ? ['', `نقص في التقرير: ${gaps.join('، ')}`] : []),
     '',
     '## نص التقرير',
     '',
     data.reportText,
     '',
+    '## ملاحظات الإدارة',
+    '',
+    data.adminNotes || 'لا ملاحظات.',
+    '',
     '---',
-    '',
-    '## ملاحظات خاصة للإدارة',
-    '',
-    data.adminNotes || 'لا توجد ملاحظات إدارية.',
+    `للتتبع: ${data.executionId}، ${data.submissionTimestamp}، ${data.teacherId}، ${data.sessionId}`,
     '',
   ].join('\n');
+}
 
-  return `${yamlFrontmatter}\n\n${bodyContent}`;
+/** Heads a report file that a later resubmission of the same halaqa replaced. */
+const SUPERSEDED_NOTE = 'تنبيه: حلّ محلَّ هذا التقرير تقريرٌ أحدث للحلقة نفسها:';
+
+/**
+ * Puts the superseded note, with the newer file's link, at the head of the
+ * earlier report file; once only.
+ * @param {GoogleAppsScript.Drive.File} earlier
+ * @param {string} newerUrl
+ */
+function markSupersededFile(earlier, newerUrl) {
+  const content = earlier.getBlob().getDataAsString('UTF-8');
+  if (content.indexOf(SUPERSEDED_NOTE) === 0) return;
+  earlier.setContent(`${SUPERSEDED_NOTE} ${newerUrl}\n\n${content}`);
 }
 
 // ============================================================================
@@ -834,7 +891,8 @@ function generateMarkdownContent(data) {
  * @param {GoogleAppsScript.Drive.Folder} monthFolder
  * @param {Object} data
  * @param {string} content
- * @returns {{ file: GoogleAppsScript.Drive.File, isDuplicate: boolean, duplicateIndex: number }}
+ * @returns {{ file: GoogleAppsScript.Drive.File, isDuplicate: boolean, duplicateIndex: number,
+ *   earlier: ?GoogleAppsScript.Drive.File }} earlier is the latest file of the same halaqa.
  */
 function saveMarkdownFile(monthFolder, data, content) {
   // Include the halaqa number so two halaqat of the same type on the same day are not "duplicates".
@@ -842,14 +900,17 @@ function saveMarkdownFile(monthFolder, data, content) {
   const baseName = sanitizeFilename(`${data.submissionDateFormatted}_${data.sessionType}${halaPart}_${data.teacherName}`);
   let targetFilename = `${baseName}.md`;
   let duplicateIndex = 0;
+  let earlier = null;
+  let found;
 
-  while (_firstNotTrashed(monthFolder.getFilesByName(targetFilename))) {
+  while ((found = _firstNotTrashed(monthFolder.getFilesByName(targetFilename)))) {
+    earlier = found;
     duplicateIndex++;
     targetFilename = `${baseName} (${duplicateIndex}).md`;
   }
 
   const blob = Utilities.newBlob(content, 'text/markdown; charset=UTF-8', targetFilename);
-  return { file: monthFolder.createFile(blob), isDuplicate: duplicateIndex > 0, duplicateIndex };
+  return { file: monthFolder.createFile(blob), isDuplicate: duplicateIndex > 0, duplicateIndex, earlier };
 }
 
 /**
@@ -945,6 +1006,11 @@ function recordToTeacherSheet(yearTeacherFolder, data) {
   ]);
 
   const newDataRow = sheet.getLastRow();
+  // The halaqa label links to the report file, in the sheet and the dashboard alike.
+  if (data.fileUrl) {
+    sheet.getRange(newDataRow, 2).setRichTextValue(SpreadsheetApp.newRichTextValue()
+      .setText(_sessionLabel(data)).setLinkUrl(data.fileUrl).build());
+  }
   sheet.getRange(newDataRow, 4).setNumberFormat('[h]:mm');
   if (data.studentCount !== null) {
     sheet.getRange(newDataRow, 5).setNumberFormat('0');
@@ -1123,6 +1189,144 @@ function sendEmailAlert(details) {
   MailApp.sendEmail(recipient, subject, body);
 }
 
+/**
+ * Mails the admin; quiet in a test run and without ALERT_EMAIL.
+ * @param {string} subject
+ * @param {string[]} lines
+ */
+function _mailAdmin(subject, lines) {
+  if (!CONFIG.ALERT_EMAIL || _TEST_MODE) return;
+  MailApp.sendEmail(CONFIG.ALERT_EMAIL, `[تنبيه أتمتة أكاديمية سنا] ${subject}`, lines.join('\n'));
+}
+
+/**
+ * A saved report whose alert Telegram could not carry.
+ * @param {Object} data - Validated data.
+ * @param {string[]} problems - From reportProblems.
+ * @param {string} telegramFailure - The Telegram error, or ''.
+ */
+function sendReportProblemEmail(data, problems, telegramFailure) {
+  const lines = problems.map(p => `• ${p}`);
+  if (telegramFailure) lines.push(`• فشلت رسالة Telegram: ${telegramFailure}`);
+  _mailAdmin(`${data.teacherName} — ${_sessionLabel(data)}`, [
+    'وصل تقرير حلقة وحُفظ في Drive، وفيه ما يحتاج نظرك:',
+    '',
+    ...lines,
+    '',
+    `المعلم: ${data.teacherName}`,
+    `الحلقة: ${_sessionLabel(data)}`,
+    `التاريخ: ${data.reportDateText || data.submissionDateFormatted}`,
+    `التقرير: ${data.fileUrl || 'لا رابط'}`,
+  ]);
+}
+
+// Two marks per form response, one script property per stage and day, kept
+// MISSED_CHECK_KEEP_DAYS: SAVED once its file is in Drive, DONE when the run
+// ends. Saved but not done is a run cut off midway, which reprocessing must not
+// repeat: a second file would mark itself a duplicate and not count.
+const RESPONSE_MARKS = { SAVED: 'SAVED_', DONE: 'DONE_' };
+const MARKS_SINCE = 'MARKS_SINCE';
+const MISSED_CHECK_KEEP_DAYS = 14;
+
+/**
+ * Marks a form response at a stage. The first mark also records when marking
+ * began, as earlier responses have none.
+ * @param {string} prefix - A RESPONSE_MARKS value.
+ * @param {string} responseId - '' for a test or diagnostic run, which is not marked.
+ */
+function markResponse(prefix, responseId) {
+  if (!responseId || _TEST_MODE) return;
+  const props = PropertiesService.getScriptProperties();
+  const now = new Date();
+  if (!props.getProperty(MARKS_SINCE)) props.setProperty(MARKS_SINCE, now.toISOString());
+  const key = prefix + Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const ids = JSON.parse(props.getProperty(key) || '[]');
+  ids.push(responseId);
+  props.setProperty(key, JSON.stringify(ids));
+}
+
+/**
+ * The responses of [from, to), after marking began, that a run did not finish:
+ * notSaved has no file; cutOff has its file but stopped before the sheet,
+ * registry or Telegram were sure.
+ * @param {Array<{id: string, time: Date}>} responses
+ * @param {{saved: Set<string>, done: Set<string>}} marks
+ * @param {Date} from
+ * @param {Date} to
+ * @param {Date} since
+ * @returns {{notSaved: Array<Object>, cutOff: Array<Object>}}
+ */
+function missedResponses(responses, marks, from, to, since) {
+  const inRange = responses.filter(r => r.time >= from && r.time < to && r.time >= since && !marks.done.has(r.id));
+  return { notSaved: inRange.filter(r => !marks.saved.has(r.id)), cutOff: inRange.filter(r => marks.saved.has(r.id)) };
+}
+
+/** The form's responses since a time, with both marks and when marking began. */
+function _responseState(from) {
+  const props = PropertiesService.getScriptProperties();
+  const all = props.getProperties();
+  const marksOf = prefix => {
+    const ids = new Set();
+    Object.keys(all).filter(k => k.indexOf(prefix) === 0).forEach(k => JSON.parse(all[k] || '[]').forEach(id => ids.add(id)));
+    return ids;
+  };
+  const responses = FormApp.getActiveForm().getResponses(from)
+    .map(r => ({ id: r.getId(), time: r.getTimestamp(), response: r }));
+  return { props, all, responses, marks: { saved: marksOf(RESPONSE_MARKS.SAVED), done: marksOf(RESPONSE_MARKS.DONE) },
+    since: all[MARKS_SINCE] ? new Date(all[MARKS_SINCE]) : null };
+}
+
+/**
+ * Nightly: mails the admin yesterday's responses that a run did not finish,
+ * which covers what no run could report (a timeout, a quota, a crash). Then
+ * drops the marks older than MISSED_CHECK_KEEP_DAYS. A lost authorization or a
+ * deleted trigger stops this job too: Google's own failure email covers those.
+ * @param {Date} now
+ */
+function checkMissedResponses(now) {
+  const tz = Session.getScriptTimeZone();
+  const today = new Date(Utilities.formatDate(now, tz, "yyyy-MM-dd'T'00:00:00XXX"));
+  const yesterday = new Date(today.getTime() - 24 * 3600 * 1000);
+  const state = _responseState(yesterday);
+  if (state.since) {
+    const missed = missedResponses(state.responses, state.marks, yesterday, today, state.since);
+    const line = r => `• ${Utilities.formatDate(r.time, tz, 'HH:mm')} — ${_peekTeacherName({ response: r.response })}`;
+    const day = Utilities.formatDate(yesterday, tz, 'yyyy-MM-dd');
+    const body = [];
+    if (missed.notSaved.length) {
+      body.push(`لم يُحفظ تقرير هذه الردود يوم ${day}:`, ...missed.notSaved.map(line),
+        'وهي محفوظة في الاستمارة؛ ولمعالجتها شغّل reprocessMissedResponses من محرر Apps Script.', '');
+    }
+    if (missed.cutOff.length) {
+      body.push(`حُفظ تقرير هذه الردود يوم ${day} وانقطع ما بعده:`, ...missed.cutOff.map(line),
+        'فراجع شيت المعلم وسجل الطلاب بيدك، ولا تُعِد معالجتها.');
+    }
+    if (body.length) _mailAdmin(`${missed.notSaved.length + missed.cutOff.length} من تقارير ${day} لم تكتمل`, body);
+  }
+  const keepFrom = Utilities.formatDate(new Date(today.getTime() - MISSED_CHECK_KEEP_DAYS * 24 * 3600 * 1000), tz, 'yyyy-MM-dd');
+  Object.values(RESPONSE_MARKS).forEach(prefix => Object.keys(state.all)
+    .filter(k => k.indexOf(prefix) === 0 && k < prefix + keepFrom)
+    .forEach(k => state.props.deleteProperty(k)));
+}
+
+/**
+ * Run by hand from the editor: processes again, as the form trigger would,
+ * every response of the last MISSED_CHECK_KEEP_DAYS days whose report was not
+ * saved. One saved but cut off is left for a hand check.
+ */
+function reprocessMissedResponses() {
+  const now = new Date();
+  const from = new Date(now.getTime() - MISSED_CHECK_KEEP_DAYS * 24 * 3600 * 1000);
+  const state = _responseState(from);
+  if (!state.since) return console.log('[REPROCESS] No marks yet; nothing to compare.');
+  const missed = missedResponses(state.responses, state.marks, from, now, state.since).notSaved;
+  missed.forEach(r => {
+    try { onFormSubmit({ response: r.response }); }
+    catch (error) { console.error(`[REPROCESS] ${r.id} failed:`, error.message); }
+  });
+  console.log(`[REPROCESS] ${missed.length} response(s) processed again.`);
+}
+
 // ============================================================================
 // 13. UTILITIES & RETRY ENGINE
 // ============================================================================
@@ -1171,18 +1375,44 @@ function sanitizeFilename(str) {
 // ============================================================================
 
 /**
+ * What the admin must know of a report that the form and the app cannot stop:
+ * a failed write, a stopped nightly trigger, a hand-typed report without the
+ * app's header lines, and a report for a frozen month (S-20).
+ * @param {Object} data - Validated data, after the sheet and registry steps.
+ * @param {Date} today
+ * @returns {string[]}
+ */
+function reportProblems(data, today) {
+  const out = [];
+  if (data.sheetFailed) out.push('لم يُكتب في شيت المعلم، فأضِفه باليد');
+  if (data.registryFailed) out.push('لم يُسجَّل حضور الطلاب في سجل الطلاب');
+  if (data.nightlyMissing) out.push('المؤقت الليلي متوقف، فشغّل installNightlyTrigger من المحرر');
+  const fromHeader = ' (من التقرير)';
+  // The Telegram diagnostic sends a bare sample without missingFields.
+  const header = (data.missingFields || []).filter(f => f.endsWith(fromHeader)).map(f => f.slice(0, -fromHeader.length));
+  if (header.length) out.push(`ينقص من ترويسة التقرير: ${header.join('، ')}`);
+  if (data.reportDateText && !_parseReportDate(data.reportDateText)) {
+    out.push('لم يُفهم تاريخ التقرير، فحُسب بتاريخ الإرسال');
+  }
+  const month = _tabMonth(data.submissionMonthFolderName, data.submissionYear);
+  if (month && isMonthFrozen(month, today)) out.push('شهر ثابت: يدخل الراتب لا الملف العام');
+  return out;
+}
+
+/**
  * Sends a structured notification card to Telegram via Bot API.
  * @param {Object} data - Validated submission data.
+ * @returns {boolean} Whether a message went out; false when Telegram is off.
  */
 function sendTelegramNotification(data) {
-  if (!CONFIG.TELEGRAM.ENABLED || _TEST_MODE) return;
+  if (!CONFIG.TELEGRAM.ENABLED || _TEST_MODE) return false;
 
   const botToken = CONFIG.TELEGRAM.BOT_TOKEN;
   const chatId   = CONFIG.TELEGRAM.CHAT_ID;
 
   if (!botToken || !chatId) {
     console.warn('[TELEGRAM WARNING] Bot token or Chat ID is missing. Notification skipped.');
-    return;
+    return false;
   }
 
   const messageLines = [
@@ -1194,6 +1424,10 @@ function sendTelegramNotification(data) {
     `• <b>مدة الحصة:</b> ${escapeHtml(data.durationFormatted || 'غير محدد')} (<code>${escapeHtml(data.durationTime || '00:00')}</code>)`,
     `• <b>عدد الطلاب:</b> ${escapeHtml(data.studentCount !== null && data.studentCount !== undefined ? String(data.studentCount) : 'غير محدد')}`,
   ];
+
+  // Under the title, so the phone's notification shows it.
+  const problems = reportProblems(data, new Date());
+  if (problems.length) messageLines.splice(1, 0, `⚠️ <b>تنبيه:</b> ${escapeHtml(problems.join('، '))}`);
 
   // Says which report of a resent halaqa counts (S-58), so the admin need not open the sheet.
   if (data.replacedEarlier) {
@@ -1232,7 +1466,7 @@ function sendTelegramNotification(data) {
 
   if (resCode === 200) {
     console.log('[TELEGRAM SUCCESS] Notification delivered successfully.');
-    return;
+    return true;
   }
 
   console.warn(`[TELEGRAM ERROR] Status ${resCode} for chat ${chatId}: ${response.getContentText()}`);
@@ -1243,7 +1477,7 @@ function sendTelegramNotification(data) {
     const retryRes = UrlFetchApp.fetch(url, buildOptions(fallbackChatId));
     if (retryRes.getResponseCode() === 200) {
       console.log('[TELEGRAM SUCCESS] Delivered on retry with supergroup ID.');
-      return;
+      return true;
     }
   }
   // Throw so the caller logs the failure to Drive instead of losing it in the console.

@@ -509,22 +509,51 @@ const STUDENT_DATE_COLUMNS = [4, 5, 8, 10];
  * Records one report in the registry, inside the submission lock.
  * @param {GoogleAppsScript.Drive.Folder} yearFolder
  * @param {Object} data - Validated data.
- * @returns {{ newStudents: string[], counted: number }}
+ * @returns {{ newStudents: string[], counted: number, phones: Object<string, string> }}
  */
 function recordStudents(yearFolder, data) {
   const report = buildReportContext(data);
   const ss = getOrCreateRegistry(yearFolder, data.submissionYear);
   const aliases = rowsToAliases(_readBody(ss.getSheetByName(REGISTRY.ALIASES_TAB)));
   const sheet = _getOrCreateTeacherTab(ss, report.teacher);
-  _ensureDetailColumns(sheet);
+  const cols = _ensureDetailColumns(sheet);
   const current = readStudentsTab(sheet);
 
-  const result = applyReportToStudents(current.students, report, buildAliasMap(aliases));
+  const aliasMap = buildAliasMap(aliases);
+  const result = applyReportToStudents(current.students, report, aliasMap);
   const known = new Set(current.students.map(s => s.key));
   const created = result.students.filter(s => !known.has(s.key));
   if (created.length) _carryDetailsFromLastYear(sheet, created, report.teacher, data.submissionYear);
   writeStudentsTab(sheet, result.students, current.orphans);
-  return { newStudents: result.newStudents, counted: result.counted };
+  return {
+    newStudents: result.newStudents,
+    counted:     result.counted,
+    phones:      reportPhones(result.students, cols.phone, report, aliasMap),
+  };
+}
+
+/**
+ * The parent's phone of each student named in the report, keyed by the name as
+ * the teacher wrote it, so Parents.js finds it from the report text alone.
+ * @param {Array<Object>} students - Records after the report was applied.
+ * @param {number} phoneCol - Index of the phone among the admin cells.
+ * @param {Object} report - From buildReportContext.
+ * @param {Object<string, string>} aliasMap
+ * @returns {Object<string, string>} studentNameKey(reported name) → "+<digits>"; no entry when unknown.
+ */
+function reportPhones(students, phoneCol, report, aliasMap) {
+  const byKey = {};
+  students.forEach(s => { byKey[s.key] = s; });
+  const out = {};
+  report.students.forEach(b => {
+    const student = byKey[resolveStudentName(report.teacher, b.name, aliasMap).key];
+    const cell = student && phoneCol >= 0 ? (student.extra || [])[phoneCol] : '';
+    // A phone typed straight into the sheet may be malformed; it is skipped, not fatal.
+    let phone = '';
+    try { phone = normalizePhone(cell); } catch (e) { phone = ''; }
+    if (phone) out[studentNameKey(b.name)] = phone;
+  });
+  return out;
 }
 
 /**
@@ -734,7 +763,7 @@ function saveStudentsDetails(list, year) {
  * @param {Object} data
  * @param {string} executionId
  * @param {Date} startTime
- * @returns {{ newStudents: string[], counted: number }|null}
+ * @returns {{ newStudents: string[], counted: number, phones: Object<string, string> }|null}
  */
 function recordStudentsSafely(yearFolder, data, executionId, startTime) {
   try {

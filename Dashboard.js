@@ -109,7 +109,7 @@ function buildDashboardData(input) {
     // Every row of the teachers' sheets, as they show them (S-55).
     reports: (input.sheetReports || []).map((r, i) => ({
       teacher: r.teacher, month: r.month, day: _isoDay(r.date), order: i,
-      date: r.dateText, session: r.session, category: r.category, duration: r.duration,
+      date: r.dateText, session: r.session, link: r.link, category: r.category, duration: r.duration,
       students: r.students, notes: r.notes, minutes: r.minutes, attendance: r.attendance,
       status: isCountedReport(r) ? '' : (r.duplicate ? 'مكرر' : 'لا يُحسب'),
       // Where an edit writes, and whether it may (S-59).
