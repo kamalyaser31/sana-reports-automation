@@ -243,7 +243,6 @@ function executeSubmissionPipeline(e, executionId, startTime) {
     const registry = recordStudentsSafely(driveTarget.yearFolder, validatedData, executionId, startTime);
     if (registry) {
       validatedData.newStudents = registry.newStudents;
-      validatedData.parentPhones = registry.phones;
     } else {
       validatedData.registryFailed = true;
     }
@@ -266,13 +265,6 @@ function executeSubmissionPipeline(e, executionId, startTime) {
     telegramFailure = telegramError.message;
     console.warn(`[TELEGRAM WARNING] [ExecutionID: ${executionId}]`, telegramError.message);
     _safeLogToDrive(executionId, startTime, `Telegram Notification Failed: ${telegramError.message}`, telegramError.stack);
-  }
-
-  // Parent messages are a convenience: a failure is logged, and the report stands.
-  try {
-    sendParentMessages(validatedData, validatedData.registryFailed ? null : (validatedData.parentPhones || {}));
-  } catch (parentsError) {
-    _safeLogToDrive(executionId, startTime, `Parent messages failed: ${parentsError.message}`, parentsError.stack);
   }
 
   // Email takes the alert Telegram could not carry: a failed message, or problems

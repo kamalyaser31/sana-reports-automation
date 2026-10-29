@@ -1015,36 +1015,6 @@ function _testApi() {
   });
 }
 
-// ─── رسائل أولياء الأمور (Parents.js) ───────────────────────────────────────
-
-function _testParents() {
-  _suite('studentSections / parentMessages / reportPhones', () => {
-    const reportText = _sampleReport([
-      { name: 'حمزة علاء', hifz: 'سورة نوح ٢١-٢٨' },
-      { name: 'هدى مصطفى', female: true },
-      { name: 'بدون اسم' },
-    ]);
-    const sections = studentSections(reportText);
-    _eq(sections.map(s => s.name), ['حمزة علاء', 'هدى مصطفى'], 'one section per named student');
-    _ok(sections.every(s => s.lines.every(l => !/━/.test(l))), 'separators dropped');
-    _ok(sections.every(s => s.lines.every(l => !/نسأل الله/.test(l))), 'report footer left out');
-
-    const report = _sampleContext(23, [{ name: 'حمزه علاء' }, { name: 'هدى مصطفى', female: true }]);
-    const students = applyReportToStudents([], report, {}).students;
-    students.forEach(s => { s.extra = s.key === studentNameKey('حمزة علاء') ? ['', '00201001234567'] : ['', 'رقم خطأ']; });
-    const phones = reportPhones(students, 1, report, {});
-    _eq(phones, { [studentNameKey('حمزه علاء')]: '+201001234567' }, 'phone found, malformed phone skipped');
-
-    const data = { reportText, reportDateText: 'الجمعة، ٢٣ أكتوبر ٢٠٢٦' };
-    const messages = parentMessages(data, phones);
-    _ok(messages[0].fits && messages[0].link.indexOf('https://wa.me/201001234567?text=') === 0, 'short section: link carries the text');
-    _has(messages[0].text, 'التاريخ: الجمعة، ٢٣ أكتوبر ٢٠٢٦', 'date added');
-    _eq(messages[1].phone, '', 'student without phone has no link');
-    const long = parentMessages({ reportText: _sampleReport([{ name: 'حمزة علاء', hifz: 'سورة البقرة '.repeat(40) }]) }, phones);
-    _eq([long[0].fits, long[0].link], [false, 'https://wa.me/201001234567'], 'long section: link opens the chat only');
-  });
-}
-
 // ============================================================================
 // ③ تشغيل جميع اختبارات الوحدة
 // ============================================================================
@@ -1070,7 +1040,6 @@ function runAllUnitTests() {
   _testDashboard();
   _testApi();
   _testStudentDetails();
-  _testParents();
 
   _report('UNIT TESTS');
 }
