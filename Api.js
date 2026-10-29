@@ -58,7 +58,8 @@ const API_WRITES = {
     details: (a, r) => r.saved.map(s => `${s.name} عند ${s.teacher}: ${s.gender}، ${s.birthYear || '-'}، ${s.phone || '-'}`).join('؛ '),
   },
   // One button saves the whole pay section (U-02): rates rn0, rv0, ...; fixed
-  // expenses fn0, fv0, ...; and honorAmount.
+  // expenses fn0, fv0, ...; honorAmount; and a month's other expenses em, ea.
+  // The other expenses live behind the pay password too (2026-10-28).
   savePay: {
     label: PAY_LOG_ACTION,
     pay: true,
@@ -68,17 +69,14 @@ const API_WRITES = {
       rates: _argPairs(a, 'r').map(p => ({ teacher: p.name, rate: p.value })),
       fixed: _argPairs(a, 'f').map(p => ({ item: p.name, amount: p.value })),
       honorAmount: a.honorAmount,
+      expense: a.ea === undefined ? null : { month: a.em, amount: a.ea },
     }, year, test),
     details: (a, r) => [
       r.saved.rates.length ? `سعر الساعة: ${r.saved.rates.map(([t, v]) => `${t}: ${v}`).join('، ')}` : '',
       r.saved.fixed.length ? `مصروف ثابت: ${r.saved.fixed.map(([i, v]) => `${i}: ${v}`).join('، ')}` : '',
       r.saved.honor ? `مبلغ التكريم: ${r.saved.honor.amount} من ${r.saved.honor.from}` : '',
+      r.saved.expense ? `مصروفات أخرى: ${r.saved.expense.month}: ${r.saved.expense.amount}` : '',
     ].filter(Boolean).join('؛ '),
-  },
-  saveExpense: {
-    label: 'مصروف',
-    run: (a, year, test) => dashboardSaveExpense(a.month, a.amount, year, test),
-    details: a => `${a.month}: ${a.amount}`,
   },
   // Honors (S-60): entered without the pay password; their amount behind it.
   addHonor: {
@@ -255,8 +253,8 @@ function _runWrite(write, request, name, payOpen) {
       else appendEditLog(request.year, name, write.label, details);
     });
     // The returned data was read before this row existed; add it rather than read everything again.
-    const row = rowsToEditLog([[new Date(), name, write.label, details]])[0];
-    (write.log === 'rates' ? data.rateLog : data.log).unshift(row);
+    // The rates log stays in its Drive file and never reaches the page.
+    if (write.log !== 'rates') data.log.unshift(rowsToEditLog([[new Date(), name, write.label, details]])[0]);
   } catch (error) {
     // The write itself succeeded; a lost log row must not report it as failed.
     console.error('[API] edit log failed:', error.message);

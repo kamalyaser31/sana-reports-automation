@@ -633,7 +633,7 @@ function _testPublicStats() {
     _eq(out.totals.map(r => r[0]), ['T001', 'T002', 'الأكاديمية'], 'rows ordered by code, then the academy');
     _eq(byCode('T001').slice(1), [2, 2, 2, 0, 2, 2, 3, 1.5, 2, 2, 0, 0, '', 0], 'teacher totals');
     _eq(byCode('T002').slice(5, 9), [1, 1.5, 2, 2], 'second teacher halaqat, hours, attendance, average');
-    _eq(byCode('الأكاديمية')[1], 3, 'two-word name once across teachers, single name per teacher');
+    _eq(byCode('الأكاديمية')[1], 4, 'a name at two teachers counts once at each (2026-10-28)');
     _eq(byCode('الأكاديمية').slice(5, 9), [3, 3.5, 5, 1.7], 'academy halaqat');
     _eq(byCode('الأكاديمية')[13], 2, 'active teachers in the last 30 days');
     const later = computePublicStats(_sampleStatsInput(new Date(2026, 11, 1)));
@@ -646,9 +646,9 @@ function _testPublicStats() {
     _eq(month('2026-09', 'T001').slice(3, 7), [1, 1, '', ''], 'first month: no continuity yet');
     _eq(month('2026-10', 'T001').slice(3, 7), [1, 2, 1, 1], 'new, attended, continuing, ratio');
     const ac = month('2026-10', 'الأكاديمية');
-    _eq(ac.slice(3, 14), [2, 3, 1, 1, 2, 2.5, 4, 2, 1, 1, 2], 'academy month');
-    _eq(ac.slice(14, 18), [920, 'EGP', 368, 306.67],
-      'expense = pay 220 + fixed 200 + other 500; ÷ 2.5 sheet hours; sponsorship over 3 students');
+    _eq(ac.slice(3, 14), [3, 4, 1, 1, 2, 2.5, 4, 2, 1, 1, 2], 'academy month');
+    _eq(ac.slice(14, 18), [920, 'EGP', 368, 230],
+      'expense = pay 220 + fixed 200 + other 500; ÷ 2.5 sheet hours; sponsorship over 4 students');
     _eq(month('2026-09', 'الأكاديمية').slice(14, 18), ['', '', '', ''], 'no expense before October 2026 (S-50)');
     const base = _sampleStatsInput(new Date(2026, 9, 20));
     const listed = computePublicStats(Object.assign(base, { sheetReports: base.sheetReports.concat([
@@ -856,14 +856,23 @@ function _testDashboard() {
     _eq(mn[0].name, 'حمزة علاء', 'students newest first');
     _eq([mn[0].firstSeen, mn[0].lastSeen, mn[0].attendance], ['2026-09-28', '2026-10-03', 2], 'student dates as text');
     _ok(mn[1].isNew && !mn[0].isNew, 'first seen in the last 14 days → new');
+    _eq(mn[0].recent, [{ day: '2026-10-03', session: 'صباحية', num: '1' }, { day: '2026-09-28', session: 'صباحية', num: '1' }],
+      'last halaqat newest first, split for the report link');
+    _eq([mn[0].months, d.activeDays], [{ '2026-10': 1, '2026-09': 1 }, 30], 'halaqat per month, and the active days');
+    const many = {};
+    for (let i = 1; i <= 12; i++) many[`2026-10-${String(i).padStart(2, '0')}|مسائية|`] = ['كبار', 0, 0];
+    const capped = _slotSummary(many);
+    _eq([capped.recent.length, capped.recent[0], capped.months['2026-10']],
+      [10, { day: '2026-10-12', session: 'مسائية', num: '' }, 12], 'ten halaqat at most; a report without a number keeps it blank');
     _eq(d.aliases, [{ teacher: 'محمد نبيل', from: 'حمزه عالء', to: 'حمزة علاء', applied: false }], 'aliases listed');
-    _eq(d.expenses.map(e => e.month), ['2026-10', '2026-08'], 'expense rows listed');
     _eq(d.currency, 'EGP', 'one currency');
-    _eq([d.pay, d.teachers.map(t => t.rate), d.rateLog], [null, ['', ''], []], 'no rates or pay without the pay password');
-    const open = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true,
-      rateLog: [[new Date(2026, 9, 25, 10, 0), 'منى', 'سعر الساعة', 'محمد نبيل: 100']] }, input));
+    _eq([d.pay, d.teachers.map(t => t.rate), d.expenses], [null, ['', ''], []],
+      'no rates, pay or other expenses without the pay password');
+    const open = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input));
     _eq([open.teachers.map(t => t.rate), open.unpriced], [[80, 100], []], 'rates per teacher once unlocked, none missing');
-    _eq([open.pay.length, open.rateLog[0].details], [2, 'محمد نبيل: 100'], 'pay rows and rate log sent once unlocked');
+    _eq([open.pay.length, open.expenses.map(e => e.month)], [2, ['2026-10', '2026-08']],
+      'pay rows and expense rows sent once unlocked');
+    _ok(!('rateLog' in open), 'the rates log never reaches the page');
     _eq([d.fixed, open.fixed], [null, [{ item: 'إدارة الأكاديمية', amount: 200 }]],
       'fixed expenses only once unlocked');
     const hd = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
@@ -873,9 +882,6 @@ function _testDashboard() {
       [['2026-10-05', true], ['2026-10-04', true], ['2026-10-03', true], ['2026-09-28', false]],
       'honors newest first; one in a frozen month cannot be removed');
     _eq([hd.honorAmount, d.honorAmount], [50, ''], 'honor amount once unlocked only');
-    const fixedLog = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
-      { rateLog: [[new Date(2026, 9, 25, 9), 'منى', 'مصروف ثابت', 'إدارة الأكاديمية: 900'], [new Date(2026, 9, 25, 8), 'منى', 'سعر الساعة', 'محمد نبيل: 100']] }));
-    _eq(fixedLog.rateLog.map(e => e.action), ['سعر الساعة', 'مصروف ثابت'], 'rates log rows named by kind, newest first');
     const withSheet = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
       { teachers: input.teachers.concat([{ name: 'رجاء لطفي', code: 'T004', students: [] }]) }));
     _eq(withSheet.teachers.map(t => t.name), ['أسماء علي', 'رجاء لطفي', 'محمد نبيل'],
@@ -1353,8 +1359,9 @@ function integrationTest_Dashboard() {
     _ok(!afterDelete.aliases.some(a => a.from === typo), 'alias deleted');
     _ok(afterDelete.teachers.find(t => t.name === teacher).students.some(s => s.name === right), 'merged row stays merged');
 
-    const withExpense = dashboardSaveExpense('2026-08', '120', '2026');
-    _ok(withExpense.expenses.some(e => e.month === '2026-08' && e.amount === 120), 'expense saved from the dashboard');
+    const withExpense = _withPay(true, () => dashboardSavePay({ expense: { month: '2026-08', amount: '120' } }, '2026'));
+    _ok(withExpense.data.expenses.some(e => e.month === '2026-08' && e.amount === 120), 'expense saved with the pay');
+    _eq(withExpense.saved.expense, { month: '2026-08', amount: 120 }, 'the saved expense returned for the log');
     const withRate = _withPay(true, () => dashboardSavePay({ rates: [{ teacher, rate: '٥٠' }] }, '2026').data);
     _eq(withRate.teachers.find(t => t.name === teacher).rate, 50, 'rate saved from the dashboard');
     _ok(withRate.pay.filter(p => p.teacher === teacher).every(p => p.rate === 50), 'pay uses the new rate');
@@ -1458,13 +1465,21 @@ function integrationTest_Api() {
 
   const opened = call('unlockPay', { password: deps.payPassword }, login.token);
   _ok(opened.data.payOpen && Array.isArray(opened.data.pay), 'pay password opens rates and pay');
-  const saved = call('savePay', { rn0: teacher, rv0: '65', fn0: 'إدارة الأكاديمية', fv0: '200' }, login.token);
+  const saved = call('savePay', { rn0: teacher, rv0: '65', fn0: 'إدارة الأكاديمية', fv0: '200', em: '2026-08', ea: '90' },
+    login.token);
   _eq(saved.data.teachers.find(t => t.name === teacher).rate, 65, 'rate saved through the API');
-  _eq([saved.data.rateLog[0].name, saved.data.rateLog[0].action, saved.data.rateLog[0].details],
-    [`مختبر ${tag}`, PAY_LOG_ACTION, `سعر الساعة: ${teacher}: 65؛ مصروف ثابت: إدارة الأكاديمية: 200`],
-    'one log row for the pay save, with the name typed at login');
+  _ok(saved.data.expenses.some(e => e.month === '2026-08' && e.amount === 90), 'other expense saved with the pay');
+  let badExpense = '';
+  try { call('savePay', { rn0: teacher, rv0: '70', em: '2026-08', ea: 'x' }, login.token); } catch (e) { badExpense = e.message; }
+  _has(badExpense, 'أكبر من صفر', 'a bad expense refused');
+  _eq(call('data', {}, login.token).data.teachers.find(t => t.name === teacher).rate, 65, 'nothing saved with a bad expense');
+  const rateLog = _withMode(true, () => rowsToEditLog(readRateLogRows()));
+  _eq([rateLog[0].name, rateLog[0].action, rateLog[0].details],
+    [`مختبر ${tag}`, PAY_LOG_ACTION,
+      `سعر الساعة: ${teacher}: 65؛ مصروف ثابت: إدارة الأكاديمية: 200؛ مصروفات أخرى: 2026-08: 90`],
+    'one log row for the pay save in the rates file, with the name typed at login');
   const after = call('data', {}, login.token).data;
-  _eq(after.rateLog[0].name, `مختبر ${tag}`, 'rate log row written to the rates file');
+  _ok(!('rateLog' in after), 'the rates log never reaches the page');
   _ok(!after.log.some(e => e.action === PAY_LOG_ACTION), 'no pay row in the shared edit log');
 
   call('saveStudents', { t0: teacher, k0: studentNameKey(`منير ${tag}`), g0: STUDENT_GENDER.MALE }, login.token);
@@ -1591,7 +1606,8 @@ function integrationTest_Honors() {
   _has(refusal('savePay', { honorAmount: '75' }), 'افتح الرواتب', 'the amount needs the pay password');
   call('unlockPay', { password: deps.payPassword }, token);
   const priced = call('savePay', { honorAmount: '٧٥' }, token).data;
-  _eq([priced.honorAmount, priced.rateLog[0].action], [75, PAY_LOG_ACTION], 'amount saved in the rates file and logged there');
+  _eq([priced.honorAmount, _withMode(true, () => rowsToEditLog(readRateLogRows()))[0].action], [75, PAY_LOG_ACTION],
+    'amount saved in the rates file and logged there');
 
   // A name correction carries the honor to the right name (F-03).
   const renamed = call('applyAlias', { teacher, from: `نور ${tag}`, to: `نورة ${tag}` }, token).data;

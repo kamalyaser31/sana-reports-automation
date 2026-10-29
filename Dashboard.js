@@ -14,6 +14,7 @@
 
 const DASHBOARD = {
   NEW_DAYS:    14,
+  RECENT_HALAQAT: 10,
 };
 
 // ============================================================================
@@ -26,6 +27,24 @@ function _dayOrBlank(value) {
 }
 
 /**
+ * What the page needs of a student's slots: the last halaqat for «سجل الطالب»,
+ * and the halaqat of each month for the parent's monthly message. Memorization
+ * is kept per student, not per slot, so it is not split by month.
+ * @param {Object<string, Array>} slots - "yyyy-mm-dd|session|number" → [category, repeats, medal].
+ * @returns {{recent: Array<{day: string, session: string, num: string}>, months: Object<string, number>}}
+ */
+function _slotSummary(slots) {
+  const keys = Object.keys(slots || {}).sort().reverse();
+  const months = {};
+  keys.forEach(k => { months[k.substring(0, 7)] = (months[k.substring(0, 7)] || 0) + 1; });
+  const recent = keys.slice(0, DASHBOARD.RECENT_HALAQAT).map(k => {
+    const [day, session, num] = k.split('|');
+    return { day, session: session || '', num: num || '' };
+  });
+  return { recent, months };
+}
+
+/**
  * Turns registry contents into the plain object the page renders. Teacher
  * codes in the statistics become names again: the dashboard is private.
  * @param {Object} input
@@ -34,7 +53,6 @@ function _dayOrBlank(value) {
  * @param {Array<Array>} input.expenses
  * @param {Array<Array>} [input.rates] - «أسعار الساعة» values.
  * @param {Array<Array>} [input.log]   - «سجل التعديلات» values.
- * @param {Array<Array>} [input.rateLog] - «سجل الأسعار» values.
  * @param {Array<Object>} [input.sheetReports] - From readTeacherSheetReports.
  * @param {Array<Array>} [input.fixed] - «المصروفات الثابتة» values.
  * @param {Array<Array>} [input.honors] - «التكريمات» values (S-60).
@@ -70,13 +88,14 @@ function buildDashboardData(input) {
   return {
     year: input.year,
     today: _isoDay(input.today),
+    // The page lists students absent longer than this apart; the numbers keep them.
+    activeDays: PUBLIC_STATS.ACTIVE_DAYS,
     currency: PUBLIC_STATS.CURRENCY,
     totalsHeaders: PUBLIC_STATS.TOTALS_HEADERS,
     monthlyHeaders: PUBLIC_STATS.MONTHLY_HEADERS,
     totals: named(stats.totals),
     monthly: named(stats.monthly),
     pay: input.showPay ? stats.pay : null,
-    rateLog: input.showPay ? rowsToEditLog(input.rateLog) : [],
     unpriced: Array.from(new Set(stats.pay.filter(p => p.pay === '').map(p => p.teacher))).sort(),
     fixed: input.showPay ? PUBLIC_STATS.FIXED_ITEMS.map(item => ({ item, amount: fixed[item] || '' })) : null,
     honorAmount: input.showPay ? honorAmountFor(_monthOf(input.today), readHonorAmounts(input.honorAmounts)) : '',
@@ -102,6 +121,8 @@ function buildDashboardData(input) {
           phone: cols.phone >= 0 ? String(s.extra[cols.phone] || '') : '',
           honors: honorCount[`${t.name}|${s.key}`] || 0,
           isNew: firstSeen >= newFrom,
+          lastHifzDate: _dayOrBlank(s.lastHifzDate),
+          ..._slotSummary(s.slots),
         };
       }),
     })).sort((a, b) => (a.name > b.name ? 1 : -1)),
@@ -118,9 +139,10 @@ function buildDashboardData(input) {
     aliases: rowsToAliases(input.aliases).map(a => ({
       teacher: a.teacher, from: a.from, to: a.to, applied: a.applied,
     })),
-    expenses: (input.expenses || []).map((r, i) => ({
+    // The other expenses, like the pay, only for an unlocked session (2026-10-28).
+    expenses: input.showPay ? (input.expenses || []).map((r, i) => ({
       month: readExpenseMonths([r])[0], amount: Number(r[1]) || 0, currency: String(r[2] || ''), row: i + 2,
-    })).filter(e => e.month),
+    })).filter(e => e.month) : [],
   };
 }
 
@@ -203,7 +225,6 @@ function _getDashboardData(year, fresh) {
       fixed: readFixedRows(),
       honors: readHonorRows(registry),
       honorAmounts: readHonorAmountRows(),
-      rateLog: _SHOW_PAY ? readRateLogRows() : [],
       showPay: _SHOW_PAY,
       log: _readBody(registry.getSheetByName(REGISTRY.LOG_TAB)),
       aliases: _readBody(registry.getSheetByName(REGISTRY.ALIASES_TAB)),
@@ -331,23 +352,6 @@ function dashboardSavePay(change, year, test) {
     try {
       const saved = savePay(change, year, new Date());
       return { saved, data: _getDashboardData(year) };
-    } catch (error) {
-      throw _friendlyError(error);
-    }
-  });
-}
-
-/**
- * @param {string} month
- * @param {number|string} amount - Pounds.
- * @param {string} year
- * @returns {Object} Fresh dashboard data.
- */
-function dashboardSaveExpense(month, amount, year, test) {
-  return _withMode(test, () => {
-    try {
-      saveExpense(month, amount);
-      return _getDashboardData(year);
     } catch (error) {
       throw _friendlyError(error);
     }

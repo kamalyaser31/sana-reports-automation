@@ -1159,25 +1159,31 @@ function applyPendingAliases(year) {
 
 /**
  * Saves what the pay section changed in one go (U-02): the hourly rates, the
- * fixed expenses and the honor amount, all in the rates file (S-48). Every
- * value is checked before any is written, under one lock.
- * @param {{rates: Array<{teacher: string, rate: *}>, fixed: Array<{item: string, amount: *}>, honorAmount: *}} change
+ * fixed expenses and the honor amount in the rates file (S-48), and a month's
+ * other expenses in the registry. Every value is checked before any is
+ * written, under one lock.
+ * @param {{rates: Array<{teacher: string, rate: *}>, fixed: Array<{item: string, amount: *}>, honorAmount: *,
+ *   expense: ?{month: string, amount: *}}} change - A blank expense amount is no change.
  * @param {string} [year]
  * @param {Date} today
- * @returns {{rates: Array, fixed: Array, honor: ?{from: string, amount: number}}} What was written.
+ * @returns {{rates: Array, fixed: Array, honor: ?{from: string, amount: number},
+ *   expense: ?{month: string, amount: number}}} What was written.
  */
 function savePay(change, year, today) {
   const rates = _rateRows(change.rates || []);
   const fixed = _fixedRows(change.fixed || []);
   const amount = String(change.honorAmount === undefined ? '' : change.honorAmount).trim();
   const honor = amount === '' ? null : _honorAmountRow(amount, today);
-  if (!rates.length && !fixed.length && !honor) throw new Error('لا شيء تغيّر ليُحفظ.');
+  const e = change.expense;
+  const expense = e && String(e.amount === undefined ? '' : e.amount).trim() !== '' ? _expenseRow(e.month, e.amount) : null;
+  if (!rates.length && !fixed.length && !honor && !expense) throw new Error('لا شيء تغيّر ليُحفظ.');
   return _withScriptLock(() => {
     // Rates first: an unknown teacher is refused before anything is written.
     if (rates.length) _writeRates(rates, year);
     if (fixed.length) _writeFixed(fixed);
     if (honor) _writeHonorAmount(honor);
-    return { rates, fixed, honor };
+    if (expense) _writeExpense(expense);
+    return { rates, fixed, honor, expense };
   });
 }
 

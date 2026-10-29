@@ -84,14 +84,14 @@ function isMonthFrozen(month, today) {
 }
 
 /**
- * Who a student is at academy level (S-22): a name of two words or more is
- * one person across teachers; a single name counts per teacher.
+ * Who a student is at academy level: always per teacher, even for a name of
+ * two words found at two teachers (Kamal, 2026-10-28; overrides S-22).
  * @param {string} teacher
  * @param {Object} s
  * @returns {string}
  */
 function _academyStudentId(teacher, s) {
-  return cleanStudentName(s.name).split(' ').length >= 2 ? `k|${s.key}` : `t|${teacher}|${s.key}`;
+  return `t|${teacher}|${s.key}`;
 }
 
 /**
@@ -779,23 +779,37 @@ function _rewriteBody(sheet, firstRow, rows, width) {
 
 /**
  * Saves a month's other expenses, in pounds, in the registry (S-25, S-36):
- * updates the month's row if it exists, else appends one. Called by the dashboard.
+ * updates the month's row if it exists, else appends one. The dashboard saves
+ * it with the pay (savePay), behind the pay password.
  * @param {string} month - "yyyy-mm".
  * @param {number|string} amount
  */
 function saveExpense(month, amount) {
+  const expense = _expenseRow(month, amount);
+  _withScriptLock(() => _writeExpense(expense));
+}
+
+/**
+ * A checked expense, before anything is written.
+ * @param {string} month
+ * @param {number|string} amount
+ * @returns {{month: string, amount: number}}
+ */
+function _expenseRow(month, amount) {
   const m = String(month || '').trim();
   const value = Number(normalizeDigitsAndText(String(amount)).trim());
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) throw new Error('اكتب الشهر بصيغة 2026-10.');
   if (!(value > 0)) throw new Error('المبلغ رقم أكبر من صفر.');
+  return { month: m, amount: value };
+}
 
-  _withScriptLock(() => {
-    const sheet = _registryOrThrow(m.substring(0, 4)).getSheetByName(REGISTRY.EXPENSES_TAB);
-    const index = readExpenseMonths(_readBody(sheet)).indexOf(m);
-    const row = index === -1 ? sheet.getLastRow() + 1 : index + 2;
-    sheet.getRange(row, 1).setNumberFormat('@');
-    sheet.getRange(row, 1, 1, 3).setValues([[m, value, PUBLIC_STATS.CURRENCY]]);
-  });
+/** Writes a checked expense in its year's registry. Inside the lock. */
+function _writeExpense(expense) {
+  const sheet = _registryOrThrow(expense.month.substring(0, 4)).getSheetByName(REGISTRY.EXPENSES_TAB);
+  const index = readExpenseMonths(_readBody(sheet)).indexOf(expense.month);
+  const row = index === -1 ? sheet.getLastRow() + 1 : index + 2;
+  sheet.getRange(row, 1).setNumberFormat('@');
+  sheet.getRange(row, 1, 1, 3).setValues([[expense.month, expense.amount, PUBLIC_STATS.CURRENCY]]);
 }
 
 /**
