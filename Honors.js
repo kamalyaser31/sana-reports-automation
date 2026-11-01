@@ -67,16 +67,15 @@ function honorAmountFor(month, amounts) {
 }
 
 /**
- * The honors rows a name correction moves (F-03): those of the teacher's tab
- * whose student key is the wrong name's, with the right key and name.
+ * The honors rows a renamed student takes (F-03): those of the teacher's tab
+ * with the student's old key, with the new key and name.
  * @param {Array<Array>} rows - «التكريمات» values.
  * @param {string} tabName - The teacher's registry tab.
- * @param {string} from - The name as written.
- * @param {string} to - The correct name.
+ * @param {string} fromKey - The student's key before the rename.
+ * @param {string} to - The new name.
  * @returns {Array<{row: number, key: string, name: string}>}
  */
-function honorsAfterAlias(rows, tabName, from, to) {
-  const fromKey = studentNameKey(from);
+function honorsAfterRename(rows, tabName, fromKey, to) {
   const name = cleanStudentName(to);
   return readHonors(rows).filter(h => h.teacher === tabName && h.key === fromKey)
     .map(h => ({ row: h.row, key: studentNameKey(name), name }));
@@ -87,17 +86,17 @@ function honorsAfterAlias(rows, tabName, from, to) {
 // ============================================================================
 
 /**
- * Moves a corrected student's honors to the right name, so they stay counted
- * for that student. Runs inside the alias's script lock.
+ * Moves a renamed student's honors to the new name, so they stay counted for
+ * that student. Runs inside the save's script lock.
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} registry
  * @param {string} tabName
- * @param {string} from
+ * @param {string} fromKey
  * @param {string} to
  */
-function moveHonorsToName(registry, tabName, from, to) {
+function moveHonorsToKey(registry, tabName, fromKey, to) {
   const sheet = registry.getSheetByName(REGISTRY.HONORS_TAB);
   if (!sheet) return;
-  honorsAfterAlias(_readBody(sheet), tabName, from, to).forEach(u => {
+  honorsAfterRename(_readBody(sheet), tabName, fromKey, to).forEach(u => {
     sheet.getRange(u.row, 3).setValue(u.name);
     sheet.getRange(u.row, 5).setValue(u.key);
   });

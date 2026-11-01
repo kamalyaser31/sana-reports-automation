@@ -2,9 +2,8 @@
  * ============================================================================
  * Students.js — Students registry: pure functions (M1)
  * ============================================================================
- * Parses the student blocks of a report, builds the matching key, applies
- * aliases, counts attendance once per halaqa (the "slot" rule), and merges two
- * rows of the same student. Nothing here touches Drive or Sheets, so every
+ * Parses the student blocks of a report, builds the matching key, and counts
+ * attendance once per halaqa (the "slot" rule). Nothing here touches Drive or Sheets, so every
  * function is covered by runAllUnitTests. The plan is PLAN_STUDENTS_SHEET.md.
  * ============================================================================
  */
@@ -20,7 +19,7 @@ const FIELD_SEPARATOR_RE = /^━+$/;
 const REPORT_FOOTER_RE = /^\*?نسأل الله/;
 
 // ============================================================================
-// 1. NAME KEY & ALIASES
+// 1. NAME KEY
 // ============================================================================
 
 /**
@@ -37,8 +36,8 @@ function cleanStudentName(name) {
 
 /**
  * Matching key (S-03): hamza forms → ا, ة → ه, ى → ي, no tashkeel, tatweel or spaces.
- * The report app's duplicate check uses the same rule, so what merges here is
- * already blocked there.
+ * The report app's duplicate check uses the same rule, so two blocks that share
+ * a key here are already blocked there.
  * @param {string} name
  * @returns {string}
  */
@@ -48,39 +47,6 @@ function studentNameKey(name) {
     .replace(/ة/g, 'ه')
     .replace(/ى/g, 'ي')
     .replace(/[ً-ْٰـ\s]/g, '');
-}
-
-/**
- * Builds a lookup from the «الأسماء البديلة» rows.
- * @param {Array<{teacher: string, from: string, to: string}>} aliases
- * @returns {Object<string, string>} "teacher|fromKey" → correct display name.
- */
-function buildAliasMap(aliases) {
-  const map = {};
-  (aliases || []).forEach(a => {
-    const to = cleanStudentName(a.to);
-    if (!a.teacher || !to || studentNameKey(a.from) === studentNameKey(to)) return;
-    map[`${a.teacher}|${studentNameKey(a.from)}`] = to;
-  });
-  return map;
-}
-
-/**
- * Resolves a reported name through the aliases, following chains (a → b → c).
- * @param {string} teacher
- * @param {string} name
- * @param {Object<string, string>} aliasMap
- * @returns {{ key: string, display: string }}
- */
-function resolveStudentName(teacher, name, aliasMap) {
-  let display = cleanStudentName(name);
-  // A bounded walk, so a cycle written by mistake (a → b → a) cannot hang the run.
-  for (let hop = 0; hop < 5; hop++) {
-    const next = (aliasMap || {})[`${teacher}|${studentNameKey(display)}`];
-    if (!next) break;
-    display = next;
-  }
-  return { key: studentNameKey(display), display };
 }
 
 // ============================================================================
@@ -182,8 +148,8 @@ function buildReportContext(data) {
 }
 
 /**
- * Derives the counted columns from a student's slots, so a merge or a late
- * report recomputes them instead of patching them.
+ * Derives the counted columns from a student's slots, so a late report
+ * recomputes them instead of patching them.
  * @param {Object<string, Array>} slots - slot key → [category, repeats, medal 0|1].
  * @returns {{ attendance: number, firstSeen: Date|null, lastSeen: Date|null, category: string, repeats: number, medals: number }}
  */
@@ -226,10 +192,9 @@ function deriveStudentStats(slots) {
  * Does not mutate its input (CQS).
  * @param {Array<Object>} students - Records as returned by rowToStudent.
  * @param {Object} report - From buildReportContext.
- * @param {Object<string, string>} aliasMap
  * @returns {{ students: Array<Object>, newStudents: string[], counted: number }}
  */
-function applyReportToStudents(students, report, aliasMap) {
+function applyReportToStudents(students, report) {
   const byKey = {};
   const result = (students || []).map(s => {
     const copy = _cloneStudent(s);
@@ -239,7 +204,7 @@ function applyReportToStudents(students, report, aliasMap) {
   const newStudents = [];
   let counted = 0;
 
-  _mergeSameNameBlocks(report, aliasMap).forEach(block => {
+  _mergeSameNameBlocks(report).forEach(block => {
     let student = byKey[block.key];
     if (!student) {
       // Gender is written only here, at creation; afterwards it belongs to the admin (S-11).
@@ -262,16 +227,16 @@ function applyReportToStudents(students, report, aliasMap) {
 }
 
 /**
- * Folds blocks that resolve to one key within a single report (S-13).
+ * Folds blocks that share one key within a single report (S-13).
  * @param {Object} report
- * @param {Object<string, string>} aliasMap
  * @returns {Array<Object>}
  */
-function _mergeSameNameBlocks(report, aliasMap) {
+function _mergeSameNameBlocks(report) {
   const merged = {};
   const order = [];
   report.students.forEach(b => {
-    const { key, display } = resolveStudentName(report.teacher, b.name, aliasMap);
+    const display = cleanStudentName(b.name);
+    const key = studentNameKey(display);
     if (!key) return;
     if (!merged[key]) {
       merged[key] = { key, display, gender: b.gender, hifz: '', repeats: 0, medal: false };
@@ -301,67 +266,6 @@ function _recordHifz(student, hifz, date) {
     student.lastHifz = hifz;
     student.lastHifzDate = date;
   }
-}
-
-// ============================================================================
-// 4. MERGE (aliases)
-// ============================================================================
-
-/**
- * Merges the wrong row into the correct one: slots are united, so a halaqa in
- * both rows counts once; gender and admin cells come from the correct row,
- * and an admin cell left empty there is filled from the wrong row, so a phone
- * typed on the misspelt row is not lost.
- * @param {Object} wrong
- * @param {Object} right
- * @returns {Object}
- */
-function mergeStudentRecords(wrong, right) {
-  const merged = _cloneStudent(right);
-  (wrong.extra || []).forEach((v, i) => {
-    if ((merged.extra[i] === '' || merged.extra[i] === undefined) && v !== '') merged.extra[i] = v;
-  });
-  for (let i = 0; i < merged.extra.length; i++) if (merged.extra[i] === undefined) merged.extra[i] = '';
-  Object.keys(wrong.slots).forEach(k => {
-    if (!merged.slots[k]) merged.slots[k] = wrong.slots[k].slice();
-  });
-  if (wrong.firstHifzDate && (!merged.firstHifzDate || wrong.firstHifzDate < merged.firstHifzDate)) {
-    merged.firstHifz = wrong.firstHifz;
-    merged.firstHifzDate = wrong.firstHifzDate;
-  }
-  if (wrong.lastHifzDate && (!merged.lastHifzDate || wrong.lastHifzDate > merged.lastHifzDate)) {
-    merged.lastHifz = wrong.lastHifz;
-    merged.lastHifzDate = wrong.lastHifzDate;
-  }
-  return merged;
-}
-
-/**
- * Applies one alias to a teacher's students: merges into the correct row when
- * it exists, otherwise renames the wrong row. A wrong name that is no longer
- * present changes nothing, so applying an alias twice is harmless.
- * @param {Array<Object>} students
- * @param {{from: string, to: string}} alias
- * @returns {{ students: Array<Object>, changed: boolean }}
- */
-function applyAliasToStudents(students, alias) {
-  const fromKey = studentNameKey(alias.from);
-  const toName = cleanStudentName(alias.to);
-  const toKey = studentNameKey(toName);
-  const wrong = (students || []).find(s => s.key === fromKey);
-  if (!wrong || !toKey || fromKey === toKey) {
-    return { students: (students || []).map(_cloneStudent), changed: false };
-  }
-
-  const right = students.find(s => s.key === toKey);
-  const replacement = right
-    ? mergeStudentRecords(wrong, right)
-    : Object.assign(_cloneStudent(wrong), { key: toKey, name: toName });
-  const result = students
-    .filter(s => s.key !== fromKey && s.key !== toKey)
-    .map(_cloneStudent)
-    .concat([replacement]);
-  return { students: sortStudentsByLastSeen(result), changed: true };
 }
 
 // ============================================================================
@@ -433,21 +337,6 @@ function _cloneStudent(s) {
 }
 
 /**
- * Reads «الأسماء البديلة» values (header excluded) into alias objects.
- * @param {Array<Array>} values
- * @returns {Array<{row: number, teacher: string, from: string, to: string, applied: boolean}>}
- */
-function rowsToAliases(values) {
-  return (values || []).map((v, i) => ({
-    row:     i + 2,
-    teacher: String(v[0] || '').trim(),
-    from:    cleanStudentName(v[1]),
-    to:      cleanStudentName(v[2]),
-    applied: v[3] !== '' && v[3] !== null && v[3] !== undefined,
-  })).filter(a => a.teacher && a.from && a.to);
-}
-
-/**
  * Reads «سجل التعديلات» values, newest first, as plain objects for the page.
  * @param {Array<Array>} values
  * @param {number} [limit]
@@ -483,6 +372,7 @@ function readRates(values) {
 
 const REGISTRY = {
   FILE_PREFIX:  'طلاب أكاديمية سنا',
+  // No longer written (2026-11-01); kept so registries that have it do not list it as a teacher tab.
   ALIASES_TAB:  'الأسماء البديلة',
   EXPENSES_TAB: 'المصروفات',
   // No longer written (S-53); kept so registries that have it do not list it as a teacher tab.
@@ -497,7 +387,6 @@ const REGISTRY = {
     'أول حفظ جديد', 'تاريخ أول حفظ', 'آخر حفظ جديد', 'تاريخ آخر حفظ',
     'مرات الإعادة', 'عدد الأوسمة', 'بيانات النظام',
   ],
-  ALIAS_HEADERS:   ['المعلم', 'الاسم كما ورد', 'الاسم الصحيح', 'تاريخ التطبيق'],
   EXPENSE_HEADERS: ['الشهر', 'المبلغ', 'العملة'],
   LOG_HEADERS:     ['الوقت', 'الاسم', 'الفعل', 'التفاصيل'],
 };
@@ -514,13 +403,11 @@ const STUDENT_DATE_COLUMNS = [4, 5, 8, 10];
 function recordStudents(yearFolder, data) {
   const report = buildReportContext(data);
   const ss = getOrCreateRegistry(yearFolder, data.submissionYear);
-  const aliases = rowsToAliases(_readBody(ss.getSheetByName(REGISTRY.ALIASES_TAB)));
   const sheet = _getOrCreateTeacherTab(ss, report.teacher);
   _ensureDetailColumns(sheet);
   const current = readStudentsTab(sheet);
 
-  const aliasMap = buildAliasMap(aliases);
-  const result = applyReportToStudents(current.students, report, aliasMap);
+  const result = applyReportToStudents(current.students, report);
   const known = new Set(current.students.map(s => s.key));
   const created = result.students.filter(s => !known.has(s.key));
   if (created.length) _carryDetailsFromLastYear(sheet, created, report.teacher, data.submissionYear);
@@ -668,13 +555,17 @@ function _ensureDetailColumns(sheet) {
 }
 
 /**
- * Saves the gender, birth year and phone of the students changed on the page
- * (U-03), each found by key in column M. Only the fields that differ from the
- * sheet are checked and written, all checked before any is written, and each
- * teacher tab is read once. Empty details clear the cell.
- * @param {Array<{teacher: string, key: string, gender: string, birthYear: *, phone: *}>} list
+ * Saves the name, gender, birth year and phone of the students changed on the
+ * page (U-03), each found by key in column M. Only the fields that differ from
+ * the sheet are checked and written, all checked before any is written, and
+ * each teacher tab is read once. Empty details clear the cell.
+ * A new name takes a new key, so later reports in that spelling join the row;
+ * one that matches another student of the teacher is refused, as nothing is
+ * merged (2026-11-01).
+ * @param {Array<{teacher: string, key: string, name: string, gender: string, birthYear: *, phone: *}>} list
  * @param {string} [year]
- * @returns {Array<{teacher: string, name: string, gender: string, birthYear: number|string, phone: string}>}
+ * @returns {Array<{teacher: string, name: string, oldName: string, gender: string,
+ *   birthYear: number|string, phone: string}>}
  */
 function saveStudentsDetails(list, year) {
   if (!list.length) throw new Error('لا طالب تغيّر ليُحفظ.');
@@ -691,8 +582,9 @@ function saveStudentsDetails(list, year) {
         tab = tabs[item.teacher] = { sheet, body, students: body.map(rowToStudent), cols: studentDetailColumns(_headerRow(sheet)) };
       }
       const index = tab.students.findIndex(st => st && st.key === item.key);
-      if (index === -1) throw new Error('لم يوجد الطالب؛ لعل صفه دُمج. حدّث الصفحة.');
-      const name = tab.students[index].name;
+      if (index === -1) throw new Error('لم يوجد الطالب؛ لعل اسمه صُحّح من جهاز آخر. حدّث الصفحة.');
+      const oldName = tab.students[index].name;
+      let name = oldName;
       const row = tab.body[index];
       const text = v => String(v === undefined || v === null ? '' : v).trim();
       const cell = f => (tab.cols[f] === -1 ? '' : text(row[STUDENT_SYSTEM_COLUMNS + tab.cols[f]]));
@@ -700,6 +592,13 @@ function saveStudentsDetails(list, year) {
       // hand must not refuse the save of another field.
       const change = {};
       try {
+        const typed = cleanStudentName(item.name);
+        if (item.name !== undefined && typed !== oldName) {
+          if (!studentNameKey(typed)) throw new Error('اكتب الاسم.');
+          change.name = typed;
+          change.key = studentNameKey(typed);
+          name = typed;
+        }
         if (text(item.gender) !== text(row[1])) {
           if (item.gender !== STUDENT_GENDER.MALE && item.gender !== STUDENT_GENDER.FEMALE) throw new Error('الجنس ذكر أو أنثى.');
           change.gender = item.gender;
@@ -707,27 +606,48 @@ function saveStudentsDetails(list, year) {
         if (text(item.birthYear) !== cell('birthYear')) change.birthYear = normalizeBirthYear(item.birthYear, today);
         if (text(item.phone) !== cell('phone')) change.phone = normalizePhone(item.phone);
       } catch (error) {
-        throw new Error(`${name} عند ${item.teacher}: ${error.message}`);
+        throw new Error(`${oldName} عند ${item.teacher}: ${error.message}`);
       }
       return {
-        teacher: item.teacher, name, row: index + 2, change,
+        teacher: item.teacher, name, oldName, key: item.key, row: index + 2, change,
         gender: 'gender' in change ? change.gender : text(row[1]),
         birthYear: 'birthYear' in change ? change.birthYear : cell('birthYear'),
         phone: 'phone' in change ? change.phone : cell('phone'),
       };
+    });
+    // Checked for every tab before any write: a new name may not be another student's.
+    Object.keys(tabs).forEach(teacher => {
+      const mine = saved.filter(s => s.teacher === teacher);
+      const finalKeys = tabs[teacher].students.map((st, i) => {
+        const s = mine.find(m => m.row === i + 2);
+        return s && s.change.key ? s.change.key : st && st.key;
+      });
+      mine.filter(s => s.change.key).forEach(s => {
+        if (finalKeys.filter(k => k === s.change.key).length > 1) {
+          throw new Error(`الاسم «${s.name}» لطالب آخر عند ${teacher}، ولا دمج بين الطلاب.`);
+        }
+      });
     });
     Object.keys(tabs).forEach(teacher => {
       const sheet = tabs[teacher].sheet;
       const mine = saved.filter(s => s.teacher === teacher);
       const cols = mine.some(s => 'birthYear' in s.change || 'phone' in s.change) ? _ensureDetailColumns(sheet) : null;
       mine.forEach(s => {
+        if ('name' in s.change) {
+          const meta = JSON.parse(tabs[teacher].body[s.row - 2][STUDENT_SYSTEM_COLUMNS - 1]);
+          meta.key = s.change.key;
+          sheet.getRange(s.row, 1).setValue(sheetText(s.name));
+          sheet.getRange(s.row, STUDENT_SYSTEM_COLUMNS).setValue(JSON.stringify(meta));
+          moveHonorsToKey(ss, sheet.getName(), s.key, s.name);
+        }
         if ('gender' in s.change) sheet.getRange(s.row, 2).setValue(s.gender);
         if ('birthYear' in s.change) sheet.getRange(s.row, STUDENT_SYSTEM_COLUMNS + 1 + cols.birthYear).setValue(s.birthYear);
         // Text, or Sheets reads "+20…" as a number and drops the plus sign.
         if ('phone' in s.change) sheet.getRange(s.row, STUDENT_SYSTEM_COLUMNS + 1 + cols.phone).setNumberFormat('@').setValue(s.phone);
       });
     });
-    return saved.map(({ teacher, name, gender, birthYear, phone }) => ({ teacher, name, gender, birthYear, phone }));
+    return saved.map(({ teacher, name, oldName, gender, birthYear, phone }) =>
+      ({ teacher, name, oldName, gender, birthYear, phone }));
   });
 }
 
@@ -751,8 +671,7 @@ function recordStudentsSafely(yearFolder, data, executionId, startTime) {
 }
 
 /**
- * Opens the year's registry, creating it with its tabs on first use. A new
- * year copies the previous year's aliases (S-02).
+ * Opens the year's registry, creating it with its tabs on first use.
  * @param {GoogleAppsScript.Drive.Folder} yearFolder
  * @param {string} year
  * @returns {GoogleAppsScript.Spreadsheet.Spreadsheet}
@@ -765,15 +684,8 @@ function getOrCreateRegistry(yearFolder, year) {
   const ss = SpreadsheetApp.create(title);
   DriveApp.getFileById(ss.getId()).moveTo(yearFolder);
   const first = ss.getSheets()[0];
-  first.setName(REGISTRY.ALIASES_TAB);
-  _styleHeader(first, REGISTRY.ALIAS_HEADERS);
-  _styleHeader(ss.insertSheet(REGISTRY.EXPENSES_TAB), REGISTRY.EXPENSE_HEADERS);
-
-  const previous = _findRegistry(String(Number(year) - 1));
-  if (previous) {
-    const carried = _readBody(previous.getSheetByName(REGISTRY.ALIASES_TAB));
-    if (carried.length) first.getRange(2, 1, carried.length, REGISTRY.ALIAS_HEADERS.length).setValues(carried);
-  }
+  first.setName(REGISTRY.EXPENSES_TAB);
+  _styleHeader(first, REGISTRY.EXPENSE_HEADERS);
   return ss;
 }
 
@@ -1026,15 +938,12 @@ function writeStudentsTab(sheet, students, orphans) {
   const width = Math.max(STUDENT_SYSTEM_COLUMNS, sheet.getLastColumn(), ...rows.map(r => r.length));
   const padded = rows.map(r => r.concat(new Array(width - r.length).fill('')));
 
-  const lastRow = sheet.getLastRow();
-  // Written first, then only the leftover rows below are cleared (a merge makes
-  // the list shorter), so a failed write never leaves the tab empty (F-01).
+  // Written over the old rows, never cleared first, so a failed write never
+  // leaves the tab empty (F-01). The list only grows, as nothing merges rows.
   if (padded.length) {
     sheet.getRange(2, 1, padded.length, width).setValues(padded);
     STUDENT_DATE_COLUMNS.forEach(c => sheet.getRange(2, c, padded.length, 1).setNumberFormat(REGISTRY.DATE_FORMAT));
   }
-  const leftover = lastRow - 1 - padded.length;
-  if (leftover > 0) sheet.getRange(2 + padded.length, 1, leftover, width).clearContent();
 }
 
 // ============================================================================
@@ -1054,103 +963,6 @@ function _withScriptLock(fn) {
   }
   try { return fn(); }
   finally { lock.releaseLock(); }
-}
-
-/**
- * Saves an alias and merges at once (S-12). If the merge fails, the alias row
- * stays without a date and applyPendingAliases retries it at night.
- * @param {{teacher: string, from: string, to: string}} alias
- * @param {string} [year] - Defaults to the current year.
- * @returns {{ outcome: 'merged'|'renamed'|'absent' }}
- */
-function applyAlias(alias, year) {
-  const from = cleanStudentName(alias.from);
-  const to = cleanStudentName(alias.to);
-  if (!alias.teacher || !from || !to) throw new Error('اختر المعلم والاسمين.');
-  if (studentNameKey(from) === studentNameKey(to)) throw new Error('الاسمان واحد بعد التطبيع، فلا حاجة إلى بديل.');
-
-  return _withScriptLock(() => {
-    const ss = _registryOrThrow(year);
-    const sheet = ss.getSheetByName(_teacherTabName(alias.teacher));
-    if (!sheet) throw new Error(`لا تبويب للمعلم «${alias.teacher}» في السجل.`);
-    const aliasTab = ss.getSheetByName(REGISTRY.ALIASES_TAB);
-    // The same wrong name again replaces its row, so the list holds one alias per name.
-    const existing = rowsToAliases(_readBody(aliasTab))
-      .find(a => a.teacher === alias.teacher && studentNameKey(a.from) === studentNameKey(from));
-    const aliasRow = existing ? existing.row : aliasTab.getLastRow() + 1;
-    aliasTab.getRange(aliasRow, 1, 1, 4).setValues([[alias.teacher, from, to, '']]);
-    const outcome = _applyAliasToTab(sheet, { from, to });
-    aliasTab.getRange(aliasRow, 4).setValue(new Date()).setNumberFormat(REGISTRY.DATE_FORMAT);
-    _carryAliasForward(alias.teacher, from, to, year);
-    return { outcome };
-  });
-}
-
-/**
- * An alias saved in a year whose next year already has a registry (say, in
- * the first days of January) goes there too, unapplied, so the night applies
- * it to the new year's reports. A new registry copies the aliases only once,
- * when it is made (S-02). Inside the lock.
- * @param {string} teacher
- * @param {string} from - Clean.
- * @param {string} to - Clean.
- * @param {string} [year]
- */
-function _carryAliasForward(teacher, from, to, year) {
-  const next = _findRegistry(String(Number(year || new Date().getFullYear()) + 1));
-  if (!next) return;
-  const tab = next.getSheetByName(REGISTRY.ALIASES_TAB);
-  const existing = rowsToAliases(_readBody(tab))
-    .find(a => a.teacher === teacher && studentNameKey(a.from) === studentNameKey(from));
-  const row = existing ? existing.row : tab.getLastRow() + 1;
-  tab.getRange(row, 1, 1, 4).setValues([[teacher, from, to, '']]);
-}
-
-/**
- * Deletes an alias, so later reports keep the name as written. Rows already
- * merged stay merged (section 12 of the plan).
- * @param {string} teacher
- * @param {string} from
- * @param {string} [year]
- * @returns {boolean} false when no such alias exists.
- */
-function deleteAlias(teacher, from, year) {
-  return _withScriptLock(() => {
-    const aliasTab = _registryOrThrow(year).getSheetByName(REGISTRY.ALIASES_TAB);
-    const match = rowsToAliases(_readBody(aliasTab))
-      .filter(a => a.teacher === teacher && studentNameKey(a.from) === studentNameKey(from));
-    // Bottom-up, so deleting a row does not shift the next one to delete.
-    match.reverse().forEach(a => aliasTab.deleteRow(a.row));
-    return match.length > 0;
-  });
-}
-
-/**
- * Nightly: applies every alias row that has no applied date yet. Each row is
- * independent, so one failure does not stop the others.
- * @param {string} [year]
- * @returns {{ applied: number, failed: number }}
- */
-function applyPendingAliases(year) {
-  return _withScriptLock(() => {
-    const ss = _findRegistry(String(year || new Date().getFullYear()));
-    if (!ss) return { applied: 0, failed: 0 };
-    const aliasTab = ss.getSheetByName(REGISTRY.ALIASES_TAB);
-    let applied = 0;
-    let failed = 0;
-    rowsToAliases(_readBody(aliasTab)).filter(a => !a.applied).forEach(a => {
-      try {
-        const sheet = ss.getSheetByName(_teacherTabName(a.teacher));
-        if (sheet) _applyAliasToTab(sheet, a);
-        aliasTab.getRange(a.row, 4).setValue(new Date()).setNumberFormat(REGISTRY.DATE_FORMAT);
-        applied++;
-      } catch (error) {
-        failed++;
-        console.error(`[ALIAS WARNING] ${a.teacher}: ${a.from} → ${a.to}:`, error.message);
-      }
-    });
-    return { applied, failed };
-  });
 }
 
 /**
@@ -1205,21 +1017,6 @@ function _writeRates(rows, year) {
     if (!known.has(teacher)) throw new Error(`لا معلم باسم «${teacher}».`);
   });
   _upsertRows(_getOrCreateRatesFile().getSheetByName(RATES_FILE.RATES_TAB), rows);
-}
-
-/**
- * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
- * @param {{from: string, to: string}} alias
- * @returns {'merged'|'renamed'|'absent'}
- */
-function _applyAliasToTab(sheet, alias) {
-  const current = readStudentsTab(sheet);
-  const hasRight = current.students.some(s => s.key === studentNameKey(alias.to));
-  const result = applyAliasToStudents(current.students, alias);
-  if (!result.changed) return 'absent';
-  writeStudentsTab(sheet, result.students, current.orphans);
-  moveHonorsToName(sheet.getParent(), sheet.getName(), alias.from, alias.to);
-  return hasRight ? 'merged' : 'renamed';
 }
 
 /**

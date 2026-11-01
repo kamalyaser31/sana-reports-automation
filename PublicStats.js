@@ -906,16 +906,13 @@ function readExpenseMonths(rows) {
 }
 
 /**
- * Nightly job (S-21): pending aliases, then the public file, then yesterday's
+ * Nightly job (S-21): the public file, then yesterday's
  * missed form responses. In the first days of January the previous year is
  * refreshed too, until its December freezes.
  * @param {Date} [today]
  */
 function nightlyStatsJob(today) {
   const now = today instanceof Date ? today : new Date();
-  try { applyPendingAliases(String(now.getFullYear())); }
-  catch (error) { _safeLogToDrive('NIGHTLY', now, `applyPendingAliases failed: ${error.message}`, error.stack); }
-
   const years = [String(now.getFullYear())];
   if (now.getMonth() === 0 && now.getDate() <= PUBLIC_STATS.FREEZE_DAY) years.push(String(now.getFullYear() - 1));
   years.forEach(y => {

@@ -4,7 +4,7 @@
  * ============================================================================
  * The page is served from GitHub Pages and reaches these functions only through
  * doPost in Api.js, after the password check. They run as the script owner.
- * It shows everything and writes: aliases (S-12), expenses
+ * It shows everything and writes: names (2026-11-01), expenses
  * (S-25), gender (S-11), birth year with phone (S-32), hourly rates (S-34),
  * report rows (S-59) and honors (S-60).
  * Teachers' pay is shown here and nowhere else (S-35). Dates leave as
@@ -58,7 +58,6 @@ function _slotSummary(slots) {
  * @param {Array<Array>} [input.honors] - «التكريمات» values (S-60).
  * @param {Array<Array>} [input.honorAmounts] - «مبلغ التكريم» values; shown with the pay only.
  * @param {boolean} [input.showPay] - Rates and pay leave only for an unlocked session (S-47).
- * @param {Array<Array>} input.aliases - «الأسماء البديلة» values.
  * @param {string[]} [input.years] - The years with a registry the page may switch to, newest first.
  * @param {Array<Object>} [input.previous] - Last year's students, from previousYearStudents.
  * @param {Date} input.today
@@ -156,9 +155,6 @@ function buildDashboardData(input) {
       status: isCountedReport(r) ? '' : (r.duplicate ? 'مكرر' : 'لا يُحسب'),
       // Where an edit writes, and whether it may (S-59).
       row: r.row, stamp: r.stamp, editable: !isMonthFrozen(r.month, input.today),
-    })),
-    aliases: rowsToAliases(input.aliases).map(a => ({
-      teacher: a.teacher, from: a.from, to: a.to, applied: a.applied,
     })),
     // The other expenses, like the pay, only for an unlocked session (2026-10-28).
     expenses: input.showPay ? (input.expenses || []).map((r, i) => ({
@@ -260,46 +256,11 @@ function _getDashboardData(year, fresh) {
       honorAmounts: readHonorAmountRows(),
       showPay: _SHOW_PAY,
       log: _readBody(registry.getSheetByName(REGISTRY.LOG_TAB)),
-      aliases: _readBody(registry.getSheetByName(REGISTRY.ALIASES_TAB)),
       today,
     });
   } catch (error) {
     throw _friendlyError(error);
   }
-}
-
-/**
- * @param {{teacher: string, from: string, to: string}} alias
- * @param {string} year
- * @param {boolean} [test] - true for the test folder (?test=1).
- * @returns {Object} { outcome, data }
- */
-function dashboardApplyAlias(alias, year, test) {
-  return _withMode(test, () => {
-    try {
-      const result = applyAlias(alias, year);
-      return { outcome: result.outcome, data: _getDashboardData(year) };
-    } catch (error) {
-      throw _friendlyError(error);
-    }
-  });
-}
-
-/**
- * @param {string} teacher
- * @param {string} from
- * @param {string} year
- * @returns {Object} Fresh dashboard data.
- */
-function dashboardDeleteAlias(teacher, from, year, test) {
-  return _withMode(test, () => {
-    try {
-      deleteAlias(teacher, from, year);
-      return _getDashboardData(year);
-    } catch (error) {
-      throw _friendlyError(error);
-    }
-  });
 }
 
 /**

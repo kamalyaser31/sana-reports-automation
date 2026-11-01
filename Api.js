@@ -39,21 +39,12 @@ const PAY_LOG_ACTION = 'الرواتب';
 
 /** Write actions: their handler and the Arabic words of their log row (S-44). */
 const API_WRITES = {
-  applyAlias: {
-    label: 'تصحيح اسم',
-    run: (a, year, test) => dashboardApplyAlias({ teacher: a.teacher, from: a.from, to: a.to }, year, test),
-    details: (a, r) => `${a.from} ← ${a.to} عند ${a.teacher} (${{ merged: 'دُمج', renamed: 'أُعيدت التسمية', absent: 'لم يوجد' }[r.outcome] || r.outcome})`,
-  },
-  deleteAlias: {
-    label: 'حذف بديل',
-    run: (a, year, test) => dashboardDeleteAlias(a.teacher, a.from, year, test),
-    details: a => `${a.from} عند ${a.teacher}`,
-  },
   // One button saves every student changed (U-03): args t0, k0, g0, b0, p0, ...
   saveStudents: {
     label: 'بيانات الطلاب',
     run: (a, year, test) => dashboardSaveStudents(_studentArgs(a), year, test),
-    details: (a, r) => r.saved.map(s => `${s.name} عند ${s.teacher}: ${s.gender}، ${s.birthYear || '-'}، ${s.phone || '-'}`).join('؛ '),
+    details: (a, r) => r.saved.map(s => `${s.oldName === s.name ? s.name : `${s.oldName} ← ${s.name}`} عند ${s.teacher}: `
+      + `${s.gender}، ${s.birthYear || '-'}، ${s.phone || '-'}`).join('؛ '),
   },
   // One button saves the whole pay section (U-02): rates rn0, rv0, ...; fixed
   // expenses fn0, fv0, ...; honorAmount; and a month's other expenses em, ea.
@@ -137,7 +128,7 @@ function _argPairs(args, prefix = '') {
 function _studentArgs(args) {
   const out = [];
   for (let i = 0; args[`t${i}`] !== undefined && i < API.MAX_PAIRS; i++) {
-    out.push({ teacher: args[`t${i}`], key: args[`k${i}`] || '', gender: args[`g${i}`] || '',
+    out.push({ teacher: args[`t${i}`], key: args[`k${i}`] || '', name: args[`n${i}`], gender: args[`g${i}`] || '',
       birthYear: args[`b${i}`] || '', phone: args[`p${i}`] || '' });
   }
   return out;

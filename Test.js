@@ -374,7 +374,7 @@ function _sampleContext(day, blocks, extra) {
 }
 
 function _testStudentKey() {
-  _suite('studentNameKey / resolveStudentName', () => {
+  _suite('studentNameKey', () => {
     _eq(studentNameKey('جودياحمد'), studentNameKey('جودي احمد'), 'spaces ignored');
     _eq(studentNameKey('أسماء علي'), studentNameKey('اسماء علي'), 'hamza forms → ا');
     _eq(studentNameKey('فاطمة محمد'), studentNameKey('فاطمه محمد'), 'ة = ه');
@@ -382,20 +382,6 @@ function _testStudentKey() {
     _ok(studentNameKey('حمزة علي') !== studentNameKey('حمزة علاء'), 'different names stay different');
     _eq(cleanStudentName('  هدى‏   مصطفى '), 'هدى مصطفى', 'display name trimmed and collapsed');
 
-    _section('الأسماء البديلة');
-    const map = buildAliasMap([
-      { teacher: 'سمية حمدي', from: 'حمزه عالء', to: 'حمزة علاء' },
-      { teacher: 'سمية حمدي', from: 'منى', to: 'منى' },
-    ]);
-    _eq(resolveStudentName('سمية حمدي', 'حمزه  عالء', map).display, 'حمزة علاء', 'alias applied');
-    _eq(resolveStudentName('محمد نبيل', 'حمزه عالء', map).display, 'حمزه عالء', 'alias is per teacher');
-    _eq(Object.keys(map).length, 1, 'alias to the same key ignored');
-    const chain = buildAliasMap([
-      { teacher: 'T', from: 'أ ب', to: 'ج د' }, { teacher: 'T', from: 'ج د', to: 'هـ و' },
-      { teacher: 'T', from: 'س ص', to: 'ع غ' }, { teacher: 'T', from: 'ع غ', to: 'س ص' },
-    ]);
-    _eq(resolveStudentName('T', 'أ ب', chain).display, 'هـ و', 'alias chain followed');
-    _ok(Boolean(resolveStudentName('T', 'س ص', chain).key), 'alias cycle does not hang');
   });
 }
 
@@ -424,14 +410,14 @@ function _testSlotRule() {
   _suite('applyReportToStudents (قاعدة الحلقة)', () => {
     const r1 = applyReportToStudents([], _sampleContext(1, [
       { name: 'حمزة علاء', grade: 'إعادة', hifz: 'نوح 1-10' }, { name: 'هدى مصطفى', female: true, medal: 'وسام' },
-    ]), {});
+    ]));
     _eq(r1.newStudents, ['حمزة علاء', 'هدى مصطفى'], 'new students listed');
     _eq(r1.counted, 2, 'both counted');
 
     _section('إعادة إرسال التقرير نفسه');
     const again = applyReportToStudents(r1.students, _sampleContext(1, [
       { name: 'حمزه علاء', grade: 'إعادة' }, { name: 'هدى مصطفى', female: true, medal: 'وسام' },
-    ]), {});
+    ]));
     _eq(again.counted, 0, 'resubmission counts nobody');
     _eq(again.newStudents.length, 0, 'ة/ه spelling is not a new student');
     const h = again.students.find(s => s.name === 'حمزة علاء');
@@ -443,12 +429,12 @@ function _testSlotRule() {
 
     _section('حلقة ثانية في اليوم نفسه');
     const second = applyReportToStudents(r1.students, _sampleContext(1, [{ name: 'سارة أحمد', female: true }],
-      { slot: '2026-10-01|صباحية|2' }), {});
+      { slot: '2026-10-01|صباحية|2' }));
     _eq(second.counted, 1, 'second halaqa counted');
 
     _section('حلقة لاحقة، ثم تقرير متأخر');
-    const later = applyReportToStudents(r1.students, _sampleContext(10, [{ name: 'حمزة علاء' }]), {});
-    const late = applyReportToStudents(later.students, _sampleContext(5, [{ name: 'حمزة علاء', hifz: 'نوح 11-20' }]), {});
+    const later = applyReportToStudents(r1.students, _sampleContext(10, [{ name: 'حمزة علاء' }]));
+    const late = applyReportToStudents(later.students, _sampleContext(5, [{ name: 'حمزة علاء', hifz: 'نوح 11-20' }]));
     const hz = late.students.find(s => s.name === 'حمزة علاء');
     const hs = deriveStudentStats(hz.slots);
     _eq(hs.attendance, 3, 'three halaqat');
@@ -457,31 +443,29 @@ function _testSlotRule() {
     _eq(late.students[0].name, 'حمزة علاء', 'newest attendance sorted first');
     _eq([hz.firstHifz, hz.lastHifz], ['نوح 1-10', 'نوح 11-20'], 'first and last memorization by date');
     _eq(hz.gender, STUDENT_GENDER.MALE, 'gender kept');
-    const older = applyReportToStudents(late.students, _sampleContext(3, [{ name: 'حمزة علاء', hifz: 'نوح 5-6' }]), {});
+    const older = applyReportToStudents(late.students, _sampleContext(3, [{ name: 'حمزة علاء', hifz: 'نوح 5-6' }]));
     const ho = older.students.find(s => s.name === 'حمزة علاء');
     _eq([ho.firstHifz, ho.lastHifz], ['نوح 1-10', 'نوح 11-20'], 'older late memorization changes neither first nor last');
 
     _section('حلقة بلا حفظ لا تمحو آخر حفظ');
-    const noHifz = applyReportToStudents(late.students, _sampleContext(12, [{ name: 'حمزة علاء' }]), {});
+    const noHifz = applyReportToStudents(late.students, _sampleContext(12, [{ name: 'حمزة علاء' }]));
     _eq(noHifz.students.find(s => s.name === 'حمزة علاء').lastHifz, 'نوح 11-20', 'last memorization kept');
 
     _section('الجنس يُكتب عند الإنشاء وحده');
-    const wrongPrefix = applyReportToStudents(r1.students, _sampleContext(3, [{ name: 'هدى مصطفى' }]), {});
+    const wrongPrefix = applyReportToStudents(r1.students, _sampleContext(3, [{ name: 'هدى مصطفى' }]));
     _eq(wrongPrefix.students.find(s => s.name === 'هدى مصطفى').gender, STUDENT_GENDER.FEMALE, 'existing gender not overwritten');
 
     _section('الاسم المكرر في تقرير واحد');
     const dup = applyReportToStudents([], _sampleContext(2, [
       { name: 'منى سامي', female: true, grade: 'إعادة' }, { name: 'منى سامى', female: true, grade: 'إعادة' },
-    ]), {});
+    ]));
     _eq(dup.students.length, 1, 'same key folded into one row');
     _eq(dup.counted, 1, 'counted once');
     _eq(deriveStudentStats(dup.students[0].slots).repeats, 2, 'repeats of both blocks kept');
 
-    _section('البديل يُطبَّق على تقرير جديد');
-    const map = buildAliasMap([{ teacher: 'سمية حمدي', from: 'حمزه عالء', to: 'حمزة علاء' }]);
-    const aliased = applyReportToStudents(r1.students, _sampleContext(4, [{ name: 'حمزه عالء' }]), map);
-    _eq(aliased.newStudents.length, 0, 'aliased name is not new');
-    _eq(deriveStudentStats(aliased.students.find(s => s.name === 'حمزة علاء').slots).attendance, 2, 'counted on the right row');
+    _section('الاسم المحرّف طالب جديد، فلا بدائل');
+    const misspelt = applyReportToStudents(r1.students, _sampleContext(4, [{ name: 'حمزه عالء' }]));
+    _eq(misspelt.newStudents, ['حمزه عالء'], 'a misspelt name makes its own row');
 
     _section('الفئة بالأغلب، والتعادل لأحدث حلقة');
     _eq(deriveStudentStats({ '2026-10-01|a|1': ['كبار', 0, 0], '2026-10-02|a|1': ['أطفال', 0, 0],
@@ -491,34 +475,11 @@ function _testSlotRule() {
   });
 }
 
-function _testMergeStudents() {
-  _suite('applyAliasToStudents (الدمج)', () => {
-    const base = applyReportToStudents([], _sampleContext(1, [
-      { name: 'حمزة علاء', hifz: 'نوح 1-10' }, { name: 'حمزه عالء', grade: 'إعادة' },
-    ]), {}).students;
-    const withSecond = applyReportToStudents(base, _sampleContext(8, [{ name: 'حمزه عالء', hifz: 'نوح 11-20' }]), {}).students;
-    const right = withSecond.find(s => s.name === 'حمزة علاء');
-    right.gender = STUDENT_GENDER.FEMALE;
-    right.extra = ['ملاحظة الإدارة'];
-
-    const r = applyAliasToStudents(withSecond, { from: 'حمزه عالء', to: 'حمزة علاء' });
-    _ok(r.changed, 'merged');
-    _eq(r.students.length, 1, 'wrong row removed');
-    const m = r.students[0];
-    const st = deriveStudentStats(m.slots);
-    _eq(st.attendance, 2, 'shared halaqa counted once');
-    _eq(st.repeats, 0, 'shared slot keeps the correct row values');
-    _eq(m.gender, STUDENT_GENDER.FEMALE, 'gender from the correct row');
-    _eq(m.extra, ['ملاحظة الإدارة'], 'admin cells from the correct row');
-    _eq([m.firstHifz, m.lastHifz], ['نوح 1-10', 'نوح 11-20'], 'memorization from both rows by date');
-
-    _ok(!applyAliasToStudents(r.students, { from: 'حمزه عالء', to: 'حمزة علاء' }).changed, 'alias not applied twice');
-
-    _section('بلا صف صحيح: إعادة تسمية');
-    const renamed = applyAliasToStudents(base.filter(s => s.name === 'حمزه عالء'), { from: 'حمزه عالء', to: 'حمزة علي' });
-    _eq([renamed.students[0].name, renamed.students[0].key], ['حمزة علي', studentNameKey('حمزة علي')], 'row and key renamed');
-
-    _section('الصف والعمود M');
+function _testStudentRows() {
+  _suite('studentToRow / rowToStudent', () => {
+    const first = applyReportToStudents([], _sampleContext(1, [{ name: 'حمزة علاء', hifz: 'نوح 1-10' }])).students;
+    const m = applyReportToStudents(first, _sampleContext(8, [{ name: 'حمزة علاء' }])).students[0];
+    m.extra = ['ملاحظة الإدارة'];
     const row = studentToRow(m);
     _eq(row.length, STUDENT_SYSTEM_COLUMNS + 1, 'A–M then admin cells');
     _eq(row[5], 2, 'F = attendance');
@@ -531,15 +492,7 @@ function _testMergeStudents() {
 }
 
 function _testRegistryRows() {
-  _suite('rowsToAliases', () => {
-    const aliases = rowsToAliases([
-      ['سمية حمدي', ' حمزه  عالء ', 'حمزة علاء', ''],
-      ['سمية حمدي', 'منى', 'منى سامي', new Date()],
-      ['', 'ناقص', 'ناقص', ''],
-    ]);
-    _eq(aliases.length, 2, 'incomplete alias row ignored');
-    _eq([aliases[0].row, aliases[0].from, aliases[0].applied], [2, 'حمزه عالء', false], 'pending alias');
-    _ok(aliases[1].applied, 'dated alias is applied');
+  _suite('_teacherTabName', () => {
     _eq(_teacherTabName('أ/ب:ج'), 'أ_ب_ج', 'tab name sanitized');
   });
 
@@ -552,15 +505,11 @@ function _testRegistryRows() {
         ops, cells, failWrite: false,
         getLastRow: () => Math.max(1, ...Object.keys(cells).filter(k => cells[k] !== '').map(k => Number(k.split(',')[0]))),
         getLastColumn: () => STUDENT_SYSTEM_COLUMNS,
-        getRange: (r, c, nr, nc) => ({
+        getRange: (r, c) => ({
           setValues: v => {
             ops.push('write');
             if (sheet.failWrite) throw new Error('quota');
             v.forEach((row, i) => row.forEach((x, j) => { cells[`${r + i},${c + j}`] = x; }));
-          },
-          clearContent: () => {
-            ops.push(`clear ${r}-${r + (nr || 1) - 1}`);
-            for (let i = 0; i < (nr || 1); i++) for (let j = 0; j < (nc || 1); j++) cells[`${r + i},${c + j}`] = '';
           },
           setNumberFormat: () => {},
         }),
@@ -571,9 +520,8 @@ function _testRegistryRows() {
       slots: { [`${day}|صباحية|1`]: ['أطفال', 0, 0] }, firstHifz: '', lastHifz: '', extra: [] });
     const three = [student('حمزة علاء', '2026-10-03'), student('منى سامي', '2026-10-02'), student('علي حسن', '2026-10-01')];
     const sheet = sheetWith(three.map(studentToRow));
-    writeStudentsTab(sheet, three.slice(0, 2), []);
-    _eq([sheet.ops, sheet.getLastRow()], [['write', 'clear 4-4'], 3],
-      'rows written first, then only the leftover row below is cleared');
+    writeStudentsTab(sheet, three, []);
+    _eq([sheet.ops, sheet.getLastRow()], [['write'], 4], 'rows written over the old ones, nothing cleared');
     const failing = sheetWith(three.map(studentToRow));
     failing.failWrite = true;
     let thrown = '';
@@ -709,10 +657,10 @@ function _testPublicStats() {
     _eq(readHonors(_sampleHonorRows()).map(h => [h.date, h.row]),
       [['2026-10-03', 2], ['2026-10-04', 3], ['2026-10-05', 4], ['2026-09-28', 6]],
       'honors read with their rows; a date cell becomes text, a bad row is left out');
-    _eq(honorsAfterAlias(_sampleHonorRows(), 'محمد نبيل', 'حمزه علاء', 'حمزة علاءالدين'),
+    _eq(honorsAfterRename(_sampleHonorRows(), 'محمد نبيل', studentNameKey('حمزه علاء'), 'حمزة علاءالدين'),
       [{ row: 2, key: studentNameKey('حمزة علاءالدين'), name: 'حمزة علاءالدين' },
         { row: 3, key: studentNameKey('حمزة علاءالدين'), name: 'حمزة علاءالدين' }],
-      'a name correction moves that teacher\'s honors of the wrong name only (F-03)');
+      'a rename moves that teacher\'s honors of the old key only (F-03)');
     const amounts = readHonorAmounts([['2026-11', 80], [new Date(2026, 9, 1), 50]]);
     _eq(['2026-09', '2026-10', '2026-12'].map(m => honorAmountFor(m, amounts)).concat([honorAmountFor('2026-10', [])]),
       [50, 50, 80, ''], 'an amount holds from its month; earlier months take the first; none before any');
@@ -848,12 +796,6 @@ function _testStudentDetails() {
       ['متابعة', '+201001234567', 2015], 'copied to new positions, other admin cell kept');
     _eq(copyStudentDetails(['', ''], { birthYear: 0, phone: 1 }, ['x'], { birthYear: 0, phone: 1 }), ['x'],
       'empty values copy nothing');
-
-    _section('الدمج يملأ الفارغ ولا يكتب فوق القائم');
-    const base = { slots: {}, firstHifz: '', firstHifzDate: null, lastHifz: '', lastHifzDate: null };
-    const wrong = Object.assign({}, base, { key: 'a', extra: ['', '+201001234567', 2015] });
-    const right = Object.assign({}, base, { key: 'b', extra: ['متابعة', '', 2014] });
-    _eq(mergeStudentRecords(wrong, right).extra, ['متابعة', '+201001234567', 2014], 'phone filled, birth year kept');
   });
 }
 
@@ -870,7 +812,7 @@ function _hasDate(value) {
 function _testDashboard() {
   _suite('buildDashboardData', () => {
     const input = _sampleStatsInput(new Date(2026, 9, 15));
-    const d = buildDashboardData(Object.assign({ year: '2026', aliases: [['محمد نبيل', 'حمزه عالء', 'حمزة علاء', '']] }, input));
+    const d = buildDashboardData(Object.assign({ year: '2026' }, input));
     _ok(!_hasDate(d), 'no Date object crosses google.script.run');
     _eq(d.totals.map(r => r[0]).slice(0, 2), ['محمد نبيل', 'أسماء علي'], 'codes become teacher names');
     _ok(d.monthly.some(r => r[2] === 'محمد نبيل'), 'monthly rows named too');
@@ -879,7 +821,7 @@ function _testDashboard() {
     _eq(mn[0].name, 'حمزة علاء', 'students newest first');
     _eq([mn[0].firstSeen, mn[0].lastSeen, mn[0].attendance], ['2026-09-28', '2026-10-03', 2], 'student dates as text');
     _ok(mn[1].isNew && !mn[0].isNew, 'first seen in the last 14 days → new');
-    const back = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, { previous: [
+    const back = buildDashboardData(Object.assign({ year: '2026' }, input, { previous: [
       { teacher: 'محمد نبيل', key: studentNameKey('محمد'), name: 'محمد', december: true, birthYear: '', lastSeen: '2025-12-20' },
       { teacher: 'محمد نبيل', key: 'gone', name: 'غائب', december: true, birthYear: '2014', lastSeen: '2025-12-21' },
     ] }));
@@ -887,9 +829,9 @@ function _testDashboard() {
     _eq(back.former.map(s => s.name), ['غائب'], 'last year\'s students not seen this year are listed');
     _eq(back.former[0].birthYear, 2014, 'their birth year as a number');
     _eq([d.previousOpen, d.years], [false, ['2026']], 'mid-year: last year closed, one year');
-    const jan = buildDashboardData(Object.assign({ year: '2027', aliases: [] }, input, { today: new Date(2027, 0, 3) }));
+    const jan = buildDashboardData(Object.assign({ year: '2027' }, input, { today: new Date(2027, 0, 3) }));
     _ok(jan.previousOpen, 'January 3: last year\'s December still open');
-    _ok(!buildDashboardData(Object.assign({ year: '2027', aliases: [] }, input, { today: new Date(2027, 0, 6) })).previousOpen,
+    _ok(!buildDashboardData(Object.assign({ year: '2027' }, input, { today: new Date(2027, 0, 6) })).previousOpen,
       'January 6: December frozen');
     _eq(mn[0].recent, [{ day: '2026-10-03', session: 'صباحية', num: '1' }, { day: '2026-09-28', session: 'صباحية', num: '1' }],
       'last halaqat newest first, split for the report link');
@@ -899,30 +841,29 @@ function _testDashboard() {
     const capped = _slotSummary(many);
     _eq([capped.recent.length, capped.recent[0], capped.months['2026-10']],
       [10, { day: '2026-10-12', session: 'مسائية', num: '' }, 12], 'ten halaqat at most; a report without a number keeps it blank');
-    _eq(d.aliases, [{ teacher: 'محمد نبيل', from: 'حمزه عالء', to: 'حمزة علاء', applied: false }], 'aliases listed');
     _eq(d.currency, 'EGP', 'one currency');
     _eq([d.pay, d.teachers.map(t => t.rate), d.expenses], [null, ['', ''], []],
       'no rates, pay or other expenses without the pay password');
-    const open = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input));
+    const open = buildDashboardData(Object.assign({ year: '2026', showPay: true }, input));
     _eq([open.teachers.map(t => t.rate), open.unpriced], [[80, 100], []], 'rates per teacher once unlocked, none missing');
     _eq([open.pay.length, open.expenses.map(e => e.month)], [2, ['2026-10', '2026-08']],
       'pay rows and expense rows sent once unlocked');
     _ok(!('rateLog' in open), 'the rates log never reaches the page');
     _eq([d.fixed, open.fixed], [null, [{ item: 'إدارة الأكاديمية', amount: 200 }]],
       'fixed expenses only once unlocked');
-    const hd = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
+    const hd = buildDashboardData(Object.assign({ year: '2026', showPay: true }, input,
       { honors: _sampleHonorRows(), honorAmounts: [['2026-10', 50]] }));
     _eq(hd.teachers[1].students.map(s => [s.name, s.honors]), [['حمزة علاء', 2], ['محمد', 1]], 'honors per student');
     _eq(hd.honors.map(h => [h.date, h.editable]),
       [['2026-10-05', true], ['2026-10-04', true], ['2026-10-03', true], ['2026-09-28', false]],
       'honors newest first; one in a frozen month cannot be removed');
     _eq([hd.honorAmount, d.honorAmount], [50, ''], 'honor amount once unlocked only');
-    const withSheet = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
+    const withSheet = buildDashboardData(Object.assign({ year: '2026', showPay: true }, input,
       { teachers: input.teachers.concat([{ name: 'رجاء لطفي', code: 'T004', students: [] }]) }));
     _eq(withSheet.teachers.map(t => t.name), ['أسماء علي', 'رجاء لطفي', 'محمد نبيل'],
       'rate list holds every academy teacher, one without students too');
     _eq(withSheet.teachers[1].rate, '', 'a teacher without a rate has none');
-    const withReports = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, { sheetReports: input.sheetReports.concat([
+    const withReports = buildDashboardData(Object.assign({ year: '2026' }, input, { sheetReports: input.sheetReports.concat([
       Object.assign({}, input.sheetReports[1], { duplicate: true, notes: '(تقرير مكرر)' }),
       { teacher: 'رجاء لطفي', date: new Date(2026, 8, 9), month: '2026-09', category: 'كبار', minutes: 480, attendance: 4 },
     ]) }));
@@ -931,10 +872,10 @@ function _testDashboard() {
       ['محمد نبيل', '2026-10-03', 'مكرر'], ['رجاء لطفي', '2026-09-09', 'لا يُحسب'],
     ], 'every sheet row sent in order, a duplicate and an excluded month named (S-55)');
     _ok(!_hasDate(withReports.reports), 'report rows hold no Date');
-    const noRate = buildDashboardData(Object.assign({ year: '2026', aliases: [], showPay: true }, input,
+    const noRate = buildDashboardData(Object.assign({ year: '2026', showPay: true }, input,
       { rates: [['محمد نبيل', 100]] }));
     _eq([noRate.teachers[0].rate, noRate.unpriced], ['', ['أسماء علي']], 'teacher without a rate named');
-    const withDetails = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, {
+    const withDetails = buildDashboardData(Object.assign({ year: '2026' }, input, {
       teachers: [{ name: 'أسماء علي', code: 'T002', detailCols: { birthYear: 0, phone: 1 },
         students: [Object.assign({}, input.teachers[0].students[0], { extra: [2015, '+201001234567'] })] }],
     }));
@@ -976,6 +917,8 @@ function _testApi() {
       [[{ name: 'أ', value: '5' }], [{ name: 'ب', value: '' }]], 'each kind of a pay save read by its prefix (U-02)');
     _eq(_studentArgs({ t0: 'سمية', k0: 'ك', g0: 'ذكر', t1: 'منى', k1: 'م', b1: '2015' }).map(s => [s.teacher, s.gender, s.birthYear]),
       [['سمية', 'ذكر', ''], ['منى', '', '2015']], 'the students of one save read in order (U-03)');
+    _eq(_studentArgs({ t0: 'سمية', k0: 'ك', n0: 'ريم', t1: 'منى', k1: 'م' }).map(s => s.name), ['ريم', undefined],
+      'a name only when the page sends one');
     _eq(parseApiRequest('{"action":"data","test":"true"}').test, false, 'test mode only for a real true');
 
     _section('كلمة المرور والجلسة');
@@ -1031,8 +974,8 @@ function _testApi() {
       [new Date(2026, 9, 25, 14, 30), 'منى', 'سعر الساعة', 'سمية حمدي: 60']]),
       [{ time: '2026-10-25 14:30', name: 'منى', action: 'سعر الساعة', details: 'سمية حمدي: 60' },
         { time: '2026-10-24 09:05', name: 'أحمد', action: 'مصروف', details: '2026-10: 500' }], 'newest first, empty rows skipped');
-    _eq(API_WRITES.applyAlias.details({ teacher: 'سمية حمدي', from: 'ريما', to: 'ريم' }, { outcome: 'merged' }),
-      'ريما ← ريم عند سمية حمدي (دُمج)', 'alias log line');
+    _eq(API_WRITES.saveStudents.details({}, { saved: [{ teacher: 'سمية حمدي', oldName: 'ريما', name: 'ريم',
+      gender: 'أنثى', birthYear: '', phone: '' }] }), 'ريما ← ريم عند سمية حمدي: أنثى، -، -', 'a rename in the log line');
     _ok(Object.keys(API_WRITES).every(k => typeof API_WRITES[k].run === 'function'), 'every write has a handler');
   });
 }
@@ -1056,7 +999,7 @@ function runAllUnitTests() {
   _testStudentKey();
   _testParseStudents();
   _testSlotRule();
-  _testMergeStudents();
+  _testStudentRows();
   _testRegistryRows();
   _testPublicStats();
   _testDashboard();
@@ -1169,7 +1112,7 @@ function integrationTest_MissingFields() {
 
 /**
  * اختبار تكاملي — سجل الطلاب: تقرير، وإعادة إرساله، وتقرير ثانٍ، وعمود إداري،
- * ثم بديل يُدمج في الحال، وتصحيح جنس. والأسماء بوسم التشغيل، فلا تختلط بتشغيل سابق.
+ * ثم تصحيح اسم بلا دمج، وتصحيح جنس. والأسماء بوسم التشغيل، فلا تختلط بتشغيل سابق.
  */
 function integrationTest_StudentsRegistry() {
   const tag = String(Date.now()).slice(-6);
@@ -1212,29 +1155,26 @@ function integrationTest_StudentsRegistry() {
   _eq(find(hamza).extra[0], 'متابعة', 'admin cell moved with its row');
   _ok(_readBody(tab()).some(r => r[0] === manual), 'hand-typed row without column M kept');
   _eq(deriveStudentStats(find(hamza).slots).attendance, 2, 'ة/ه spelling counted on the same row');
-  _section('بديل يُدمج في الحال');
+  _section('تصحيح الاسم بلا دمج');
+  const fixedName = `هالة ${tag}`;
   _TEST_MODE = true;
   try {
-    _eq(applyAlias({ teacher, from: typo, to: hoda }, '2026').outcome, 'merged', 'alias merged');
-    _eq(applyAlias({ teacher, from: typo, to: hoda }, '2026').outcome, 'absent', 'second time changes nothing');
-    const aliasRows = rowsToAliases(_readBody(_findRegistry('2026').getSheetByName(REGISTRY.ALIASES_TAB)))
-      .filter(a => a.teacher === teacher && a.from === typo);
-    _eq(aliasRows.length, 1, 'the same alias twice keeps one row');
-    _eq(applyPendingAliases('2026').failed, 0, 'no pending alias fails');
-    let sameNameError = '';
-    try { applyAlias({ teacher, from: hoda, to: `هدي ${tag}` }, '2026'); }
-    catch (e) { sameNameError = e.message; }
-    _ok(sameNameError !== '', 'alias between two spellings of one key is refused');
+    let clash = '';
+    try { saveStudentsDetails([{ teacher, key: studentNameKey(typo), name: hoda }], '2026'); }
+    catch (e) { clash = e.message; }
+    _ok(clash.indexOf('لطالب آخر') !== -1, 'the name of another student is refused: nothing is merged');
+    const saved = saveStudentsDetails([{ teacher, key: studentNameKey(typo), name: fixedName }], '2026');
+    _eq([saved[0].oldName, saved[0].name], [typo, fixedName], 'renamed');
     saveStudentsDetails([{ teacher, key: studentNameKey(hamza), gender: STUDENT_GENDER.FEMALE }], '2026');
   } finally {
     _TEST_MODE = false;
   }
-  _isNull(find(typo) || null, 'misspelt row removed');
-  _eq(deriveStudentStats(find(hoda).slots).attendance, 2, 'merged row has both halaqat');
+  _isNull(find(typo) || null, 'old name gone');
+  _eq(deriveStudentStats(find(fixedName).slots).attendance, 1, 'the renamed row keeps its halaqa under the new key');
   _eq(find(hamza).gender, STUDENT_GENDER.FEMALE, 'gender corrected by key');
 
   const third = submit('03-09-2026', `${tag}1`, [{ name: typo, female: true }]);
-  _eq(third.newStudents.length, 0, 'alias applies to the next report');
+  _eq(third.newStudents, [typo], 'the old spelling in a later report is a new student');
 }
 
 /**
@@ -1319,7 +1259,7 @@ function integrationTest_PublicStats() {
 }
 
 /**
- * اختبار تكاملي — دوال اللوحة كما تستدعيها الصفحة: القراءة، ثم بديل يُدمج،
+ * اختبار تكاملي — دوال اللوحة كما تستدعيها الصفحة: القراءة، ثم تصحيح اسم بلا دمج،
  * ثم حذفه، ثم مصروف، ثم جنس. وكل نتيجة بلا Date.
  */
 function integrationTest_Dashboard() {
@@ -1341,14 +1281,14 @@ function integrationTest_Dashboard() {
     const students = () => getDashboardData('2026').teachers.find(t => t.name === teacher).students;
     _ok(students().some(s => s.name === typo), 'misspelt student listed');
 
-    const merged = dashboardApplyAlias({ teacher, from: typo, to: right }, '2026');
-    _eq(merged.outcome, 'merged', 'alias merged from the dashboard');
-    _ok(!merged.data.teachers.find(t => t.name === teacher).students.some(s => s.name === typo), 'fresh data returned');
-    _ok(merged.data.aliases.some(a => a.from === typo && a.applied), 'alias listed as applied');
-
-    const afterDelete = dashboardDeleteAlias(teacher, typo, '2026');
-    _ok(!afterDelete.aliases.some(a => a.from === typo), 'alias deleted');
-    _ok(afterDelete.teachers.find(t => t.name === teacher).students.some(s => s.name === right), 'merged row stays merged');
+    let clash = '';
+    try { dashboardSaveStudents([{ teacher, key: studentNameKey(typo), name: right }], '2026'); }
+    catch (e) { clash = e.message; }
+    _ok(clash.indexOf('لطالب آخر') !== -1, 'renaming to another student is refused');
+    const fixedName = `ريمة ${tag}`;
+    const renamed = dashboardSaveStudents([{ teacher, key: studentNameKey(typo), name: fixedName }], '2026');
+    const names = renamed.data.teachers.find(t => t.name === teacher).students.map(s => s.name);
+    _ok(names.indexOf(fixedName) !== -1 && names.indexOf(typo) === -1, 'renamed from the dashboard, fresh data returned');
 
     const withExpense = _withPay(true, () => dashboardSavePay({ expense: { month: '2026-08', amount: '120' } }, '2026'));
     _ok(withExpense.data.expenses.some(e => e.month === '2026-08' && e.amount === 120), 'expense saved with the pay');
@@ -1597,8 +1537,8 @@ function integrationTest_Honors() {
   _eq([priced.honorAmount, _withMode(true, () => rowsToEditLog(readRateLogRows()))[0].action], [75, PAY_LOG_ACTION],
     'amount saved in the rates file and logged there');
 
-  // A name correction carries the honor to the right name (F-03).
-  const renamed = call('applyAlias', { teacher, from: `نور ${tag}`, to: `نورة ${tag}` }, token).data;
+  // A renamed student carries the honor to the new name (F-03).
+  const renamed = call('saveStudents', { t0: teacher, k0: key, n0: `نورة ${tag}` }, token).data;
   const moved = renamed.teachers.find(t => t.name === teacher).students.find(s => s.name === `نورة ${tag}`);
   const movedHonor = renamed.honors.find(h => h.row === mine.row);
   _eq([moved.honors, movedHonor.name, movedHonor.key], [1, `نورة ${tag}`, moved.key],
