@@ -1081,8 +1081,29 @@ function applyAlias(alias, year) {
     aliasTab.getRange(aliasRow, 1, 1, 4).setValues([[alias.teacher, from, to, '']]);
     const outcome = _applyAliasToTab(sheet, { from, to });
     aliasTab.getRange(aliasRow, 4).setValue(new Date()).setNumberFormat(REGISTRY.DATE_FORMAT);
+    _carryAliasForward(alias.teacher, from, to, year);
     return { outcome };
   });
+}
+
+/**
+ * An alias saved in a year whose next year already has a registry (say, in
+ * the first days of January) goes there too, unapplied, so the night applies
+ * it to the new year's reports. A new registry copies the aliases only once,
+ * when it is made (S-02). Inside the lock.
+ * @param {string} teacher
+ * @param {string} from - Clean.
+ * @param {string} to - Clean.
+ * @param {string} [year]
+ */
+function _carryAliasForward(teacher, from, to, year) {
+  const next = _findRegistry(String(Number(year || new Date().getFullYear()) + 1));
+  if (!next) return;
+  const tab = next.getSheetByName(REGISTRY.ALIASES_TAB);
+  const existing = rowsToAliases(_readBody(tab))
+    .find(a => a.teacher === teacher && studentNameKey(a.from) === studentNameKey(from));
+  const row = existing ? existing.row : tab.getLastRow() + 1;
+  tab.getRange(row, 1, 1, 4).setValues([[teacher, from, to, '']]);
 }
 
 /**

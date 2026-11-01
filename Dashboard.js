@@ -59,16 +59,26 @@ function _slotSummary(slots) {
  * @param {Array<Array>} [input.honorAmounts] - «مبلغ التكريم» values; shown with the pay only.
  * @param {boolean} [input.showPay] - Rates and pay leave only for an unlocked session (S-47).
  * @param {Array<Array>} input.aliases - «الأسماء البديلة» values.
+ * @param {string[]} [input.years] - The years with a registry the page may switch to, newest first.
+ * @param {Array<Object>} [input.previous] - Last year's students, from previousYearStudents.
  * @param {Date} input.today
  * @returns {Object}
  */
 function buildDashboardData(input) {
+  const previous = input.previous || [];
   const stats = computePublicStats({
     teachers: input.teachers, expenses: input.expenses,
     rates: input.rates, sheetReports: input.sheetReports, fixed: input.fixed,
     honors: input.honors, honorAmounts: input.honorAmounts,
-    today: input.today,
+    today: input.today, previous,
   });
+  const before = lastYearOf(previous).before;
+  const thisYear = new Set();
+  input.teachers.forEach(t => t.students.forEach(s => thisYear.add(`${t.name}|${s.key}`)));
+  // In the first days of a month its previous month is still open; in January that is last year's December.
+  const lastMonth = new Date(input.today.getFullYear(), input.today.getMonth() - 1, 1);
+  const previousOpen = input.today.getMonth() === 0 && !isMonthFrozen(_monthOf(lastMonth), input.today)
+    && input.year === String(input.today.getFullYear());
   const honors = readHonors(input.honors);
   const honorCount = {};
   honors.forEach(h => { honorCount[`${h.teacher}|${h.key}`] = (honorCount[`${h.teacher}|${h.key}`] || 0) + 1; });
@@ -87,6 +97,9 @@ function buildDashboardData(input) {
 
   return {
     year: input.year,
+    years: input.years || [input.year],
+    // January 1–5: last year's December still takes edits, under last year.
+    previousOpen,
     today: _isoDay(input.today),
     // The page lists students absent longer than this apart; the numbers keep them.
     activeDays: PUBLIC_STATS.ACTIVE_DAYS,
@@ -120,12 +133,20 @@ function buildDashboardData(input) {
           age: ageFromBirthYear(birthYear, input.today),
           phone: cols.phone >= 0 ? String(s.extra[cols.phone] || '') : '',
           honors: honorCount[`${t.name}|${s.key}`] || 0,
-          isNew: firstSeen >= newFrom,
+          // A student back from last year is not new.
+          isNew: firstSeen >= newFrom && !before.has(`${t.name}|${s.key}`),
           lastHifzDate: _dayOrBlank(s.lastHifzDate),
           ..._slotSummary(s.slots),
         };
       }),
     })).sort((a, b) => (a.name > b.name ? 1 : -1)),
+    // Last year's students not yet seen this year: the page lists them with the absent,
+    // read-only, as their details live in last year's registry.
+    former: previous.filter(p => !thisYear.has(`${p.teacher}|${p.key}`)).map(p => Object.assign({}, p, {
+      birthYear: p.birthYear === '' ? '' : Number(p.birthYear),
+      age: ageFromBirthYear(p.birthYear, input.today),
+      honors: 0,
+    })),
     log: rowsToEditLog(input.log),
     // Every row of the teachers' sheets, as they show them (S-55).
     reports: (input.sheetReports || []).map((r, i) => ({
@@ -211,13 +232,25 @@ function _withPay(show, fn) {
  */
 function _getDashboardData(year, fresh) {
   try {
-    const y = String(year || new Date().getFullYear());
-    const registry = _findRegistry(y);
+    const today = new Date();
+    const current = String(today.getFullYear());
+    const last = String(today.getFullYear() - 1);
+    let y = String(year || current);
+    let registry = _findRegistry(y);
+    // A new year has no registry until its first report, so the page shows last year meanwhile.
+    if (!registry && y === current) {
+      registry = _findRegistry(last);
+      if (registry) y = last;
+    }
     if (!registry) throw new Error(`لا سجل طلاب لسنة ${y} بعد، أو لم يُشارَك معك مجلد الأكاديمية.`);
+    const other = y === current ? last : current;
+    const years = (_findRegistry(other) ? [y, other] : [y]).sort().reverse();
     const sheetReports = readTeacherSheetReports(y, fresh === true);
     const teachers = academyTeachers(registry, sheetReports);
     return buildDashboardData({
       year: y,
+      years,
+      previous: previousYearStudents(y),
       teachers,
       expenses: _readBody(registry.getSheetByName(REGISTRY.EXPENSES_TAB)),
       rates: readRateRows(),
@@ -228,7 +261,7 @@ function _getDashboardData(year, fresh) {
       showPay: _SHOW_PAY,
       log: _readBody(registry.getSheetByName(REGISTRY.LOG_TAB)),
       aliases: _readBody(registry.getSheetByName(REGISTRY.ALIASES_TAB)),
-      today: new Date(),
+      today,
     });
   } catch (error) {
     throw _friendlyError(error);

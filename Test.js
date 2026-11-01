@@ -650,6 +650,29 @@ function _testPublicStats() {
     _eq(ac.slice(14, 18), [920, 'EGP', 368, 230],
       'expense = pay 220 + fixed 200 + other 500; ÷ 2.5 sheet hours; sponsorship over 4 students');
     _eq(month('2026-09', 'الأكاديمية').slice(14, 18), ['', '', '', ''], 'no expense before October 2026 (S-50)');
+
+    _section('يناير وطلاب السنة الماضية');
+    const rec2027 = (name, day) => ({ key: studentNameKey(name), name, gender: STUDENT_GENDER.MALE,
+      slots: { [`${day}|صباحية|1`]: ['أطفال', 0, 0] } });
+    const january = previous => computePublicStats(_sampleStatsInput(new Date(2027, 0, 10), {
+      teachers: [{ name: 'محمد نبيل', code: 'T001', students: [rec2027('حمزة علاء', '2027-01-04'), rec2027('سعيد', '2027-01-04')] }],
+      sheetReports: [{ teacher: 'محمد نبيل', date: new Date(2027, 0, 4), month: '2027-01', category: 'أطفال', minutes: 60, attendance: 2 }],
+      expenses: [],
+      previous,
+    })).monthly.find(r => r[0] === '2027-01' && r[2] === PUBLIC_STATS.ACADEMY).slice(3, 7);
+    const lastYear = [
+      { teacher: 'محمد نبيل', key: studentNameKey('حمزة علاء'), december: true },
+      { teacher: 'محمد نبيل', key: studentNameKey('محمد'), december: true },
+      { teacher: 'محمد نبيل', key: studentNameKey('سعيد'), december: false },
+    ];
+    _eq(january(lastYear), [0, 2, 1, 0.5],
+      'January: returning students are not new, and retention is over last year\'s December');
+    _eq(january(), [2, 2, '', ''], 'without last year: everyone new and no retention, as before');
+    const decemberStudent = summarizeStudent('محمد نبيل', { key: 'k', name: 'حمزة علاء', gender: STUDENT_GENDER.MALE,
+      lastHifz: '', extra: ['2015', '+201000000000'], slots: { '2026-12-05|صباحية|1': ['أطفال', 0, 0] } },
+      { birthYear: 0, phone: 1 });
+    _eq([decemberStudent.december, decemberStudent.lastSeen, decemberStudent.birthYear, decemberStudent.phone],
+      [true, '2026-12-05', '2015', '+201000000000'], 'a student summarized as a plain row');
     const base = _sampleStatsInput(new Date(2026, 9, 20));
     const listed = computePublicStats(Object.assign(base, { sheetReports: base.sheetReports.concat([
       { teacher: 'رجاء لطفي', date: new Date(2026, 8, 9), month: '2026-09', category: 'كبار', minutes: 480, attendance: 4 },
@@ -856,6 +879,18 @@ function _testDashboard() {
     _eq(mn[0].name, 'حمزة علاء', 'students newest first');
     _eq([mn[0].firstSeen, mn[0].lastSeen, mn[0].attendance], ['2026-09-28', '2026-10-03', 2], 'student dates as text');
     _ok(mn[1].isNew && !mn[0].isNew, 'first seen in the last 14 days → new');
+    const back = buildDashboardData(Object.assign({ year: '2026', aliases: [] }, input, { previous: [
+      { teacher: 'محمد نبيل', key: studentNameKey('محمد'), name: 'محمد', december: true, birthYear: '', lastSeen: '2025-12-20' },
+      { teacher: 'محمد نبيل', key: 'gone', name: 'غائب', december: true, birthYear: '2014', lastSeen: '2025-12-21' },
+    ] }));
+    _ok(!back.teachers[1].students[1].isNew, 'a student back from last year is not new');
+    _eq(back.former.map(s => s.name), ['غائب'], 'last year\'s students not seen this year are listed');
+    _eq(back.former[0].birthYear, 2014, 'their birth year as a number');
+    _eq([d.previousOpen, d.years], [false, ['2026']], 'mid-year: last year closed, one year');
+    const jan = buildDashboardData(Object.assign({ year: '2027', aliases: [] }, input, { today: new Date(2027, 0, 3) }));
+    _ok(jan.previousOpen, 'January 3: last year\'s December still open');
+    _ok(!buildDashboardData(Object.assign({ year: '2027', aliases: [] }, input, { today: new Date(2027, 0, 6) })).previousOpen,
+      'January 6: December frozen');
     _eq(mn[0].recent, [{ day: '2026-10-03', session: 'صباحية', num: '1' }, { day: '2026-09-28', session: 'صباحية', num: '1' }],
       'last halaqat newest first, split for the report link');
     _eq([mn[0].months, d.activeDays], [{ '2026-10': 1, '2026-09': 1 }, 30], 'halaqat per month, and the active days');

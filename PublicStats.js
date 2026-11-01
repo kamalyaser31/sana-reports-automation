@@ -264,6 +264,7 @@ function computeTeacherPay(sheetReports, rates) {
  * @param {Array<Array>} [input.honorAmounts] - «مبلغ التكريم» values.
  * @param {Date} input.today
  * @param {Object<string, Array<Array>>} [input.frozenMonthly] - Existing «شهرياً» rows by month.
+ * @param {Array<Object>} [input.previous] - Last year's students, from previousYearStudents.
  * @returns {{ totals: Array<Array>, monthly: Array<Array>, pay: Array<Object> }}
  *   pay names teachers, so it is for the dashboard only.
  */
@@ -286,14 +287,17 @@ function computePublicStats(input) {
   const people = {};
   teachers.forEach(t => t.students.forEach(s => {
     const id = _academyStudentId(t.name, s);
-    if (!people[id]) people[id] = { gender: s.gender, slots: {} };
+    if (!people[id]) people[id] = { gender: s.gender, slots: {}, ref: `${t.name}|${s.key}` };
     Object.keys(s.slots).forEach(k => { people[id].slots[`${t.name}|${k}`] = s.slots[k]; });
   }));
+  // ref matches a student across the two years' registries: teacher and key.
   const academyStudents = Object.keys(people).map(id => ({
+    ref: people[id].ref,
     gender: people[id].gender,
     days: Object.keys(people[id].slots).map(k => k.split('|')[1]).sort(),
   }));
   const teacherStudents = t => t.students.map(s => ({
+    ref: `${t.name}|${s.key}`,
     gender: s.gender, days: Object.keys(s.slots).map(k => k.split('|')[0]).sort(),
   }));
 
@@ -321,8 +325,26 @@ function computePublicStats(input) {
     .concat(halaqaColumns(halaqat))
     .concat([activeTeachers(halaqat.filter(h => h.date >= activeFrom)), honors.length]));
 
-  const monthly = _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, honors, input);
+  const monthly = _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, honors, input,
+    lastYearOf(input.previous));
   return { totals, monthly, pay };
+}
+
+/**
+ * What a year needs of last year's students (2026-11-01): who came before, so a
+ * returning student is not new, and who came in December, so January's
+ * retention has its previous month.
+ * @param {Array<{teacher: string, key: string, december: boolean}>} [previous]
+ * @returns {{before: Set<string>, december: string[], decemberOf: function(string): string[]}}
+ */
+function lastYearOf(previous) {
+  const list = previous || [];
+  const ref = p => `${p.teacher}|${p.key}`;
+  return {
+    before: new Set(list.map(ref)),
+    december: list.filter(p => p.december).map(ref),
+    decemberOf: teacher => list.filter(p => p.december && p.teacher === teacher).map(ref),
+  };
 }
 
 /**
@@ -330,7 +352,7 @@ function computePublicStats(input) {
  * month keeps the rows already written for it (S-20).
  * @returns {Array<Array>}
  */
-function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, honors, input) {
+function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, honors, input, lastYear) {
   const months = Array.from(new Set(halaqat.map(h => h.month).concat(pay.map(p => p.month)))).sort();
   const honorAmounts = readHonorAmounts(input.honorAmounts);
   const firstDay = halaqat.length ? halaqat.map(h => h.date).sort((a, b) => a - b)[0] : null;
@@ -345,20 +367,28 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
       return;
     }
     const since = i === 0 && firstDay ? firstDay : '';
+    // January's previous month is last year's December, which only last year's registry holds.
+    const fromLastYear = _previousMonth(month).substring(0, 4) !== month.substring(0, 4);
     const hasPrevious = months.indexOf(_previousMonth(month)) !== -1;
-    const studentPart = list => {
+    // decemberRefs: last year's December students in this list's scope (a teacher, or the academy).
+    const studentPart = (list, decemberRefs) => {
       const inMonth = s => s.days.some(d => d.substring(0, 7) === month);
-      const inPrev = s => s.days.some(d => d.substring(0, 7) === _previousMonth(month));
+      const december = new Set(decemberRefs);
+      const inPrev = fromLastYear
+        ? s => december.has(s.ref)
+        : s => s.days.some(d => d.substring(0, 7) === _previousMonth(month));
       const attended = list.filter(inMonth).length;
-      const prev = list.filter(inPrev).length;
+      const prev = fromLastYear ? decemberRefs.length : list.filter(inPrev).length;
       const stayed = list.filter(s => inMonth(s) && inPrev(s)).length;
+      const known = fromLastYear ? prev > 0 : hasPrevious;
       return {
         attended,
         cols: [
-          list.filter(s => s.days.length && s.days[0].substring(0, 7) === month).length,
+          // New: first seen this month, and not a student of last year either.
+          list.filter(s => s.days.length && s.days[0].substring(0, 7) === month && !lastYear.before.has(s.ref)).length,
           attended,
-          hasPrevious ? stayed : '',
-          hasPrevious && prev ? _round(stayed / prev, 3) : '',
+          known ? stayed : '',
+          known && prev ? _round(stayed / prev, 3) : '',
         ],
       };
     };
@@ -371,12 +401,12 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
 
     teachers.forEach(t => {
       rows.push([month, since, t.code]
-        .concat(studentPart(teacherStudents(t)).cols)
+        .concat(studentPart(teacherStudents(t), lastYear.decemberOf(t.name)).cols)
         .concat(halaqaPart(monthHalaqat.filter(h => h.teacher === t.name)).cols)
         .concat(['', '', '', '', '', monthHonors.filter(h => h.teacher === t.name).length]));
     });
 
-    const sp = studentPart(academyStudents);
+    const sp = studentPart(academyStudents, lastYear.december);
     const hp = halaqaPart(monthHalaqat);
     // A teacher without a rate would understate the cost, so it stays blank (S-36).
     const monthPay = pay.filter(p => p.month === month);
@@ -451,6 +481,7 @@ function refreshPublicStats(year, today) {
     honorAmounts: readHonorAmountRows(),
     today:    now,
     frozenMonthly,
+    previous: previousYearStudents(y),
   });
 
   const names = new Set();
@@ -468,6 +499,52 @@ function refreshPublicStats(year, today) {
   _rewriteBody(totalsTab, 3, stats.totals, PUBLIC_STATS.TOTALS_HEADERS.length);
   _rewriteBody(monthlyTab, 2, stats.monthly, PUBLIC_STATS.MONTHLY_HEADERS.length);
   return true;
+}
+
+/**
+ * Last year's students, one plain row each, for what a year cannot see in its
+ * own registry: returning students, January's retention, and who has been
+ * absent since last year (2026-11-01). Cached; for ten minutes only while
+ * last year's December still takes reports.
+ * @param {string} year
+ * @returns {Array<Object>} Empty when last year has no registry.
+ */
+function previousYearStudents(year) {
+  const last = String(Number(year) - 1);
+  const cache = CacheService.getScriptCache();
+  const key = `previous_students_${_TEST_MODE ? 'test_' : ''}${last}`;
+  const hit = cache.get(key);
+  if (hit) return JSON.parse(hit);
+  const registry = _findRegistry(last);
+  const rows = [];
+  if (registry) {
+    registryTeacherSheets(registry).forEach(sh => {
+      const cols = studentDetailColumns(_headerRow(sh));
+      readStudentsTab(sh).students.forEach(s => rows.push(summarizeStudent(sh.getName(), s, cols)));
+    });
+  }
+  const seconds = isMonthFrozen(`${last}-12`, new Date()) ? 6 * 60 * 60 : 10 * 60;
+  try { cache.put(key, JSON.stringify(rows), seconds); } catch (e) { /* over 100 KB: read again next time */ }
+  return rows;
+}
+
+/**
+ * One student of a registry tab as a plain row.
+ * @param {string} teacher - The tab's name.
+ * @param {Object} s - From readStudentsTab.
+ * @param {{birthYear: number, phone: number}} cols - From studentDetailColumns.
+ * @returns {Object}
+ */
+function summarizeStudent(teacher, s, cols) {
+  const st = deriveStudentStats(s.slots);
+  return {
+    teacher, key: s.key, name: s.name, gender: s.gender, category: st.category,
+    firstSeen: _dayOrBlank(st.firstSeen), lastSeen: _dayOrBlank(st.lastSeen), attendance: st.attendance,
+    lastHifz: s.lastHifz || '', medals: st.medals,
+    birthYear: cols.birthYear >= 0 ? (s.extra[cols.birthYear] || '') : '',
+    phone: cols.phone >= 0 ? String(s.extra[cols.phone] || '') : '',
+    december: Object.keys(s.slots).some(k => k.substring(5, 7) === '12'),
+  };
 }
 
 /**
@@ -739,6 +816,18 @@ function _getOrCreatePublicFile(yearFolder, year) {
 
   const ss = SpreadsheetApp.create(title);
   DriveApp.getFileById(ss.getId()).moveTo(yearFolder);
+  // The donors page reads each year's file by its own published links, which no script can make.
+  try {
+    _mailAdmin(`ملف إحصاءات ${year} العام أُنشئ؛ انشره ليظهر في صفحة المتبرعين`, [
+      `أُنشئ «${title}»: ${ss.getUrl()}`,
+      'ليظهر في صفحة المتبرعين:',
+      '1. افتح الملف، ثم ملف > مشاركة > النشر على الويب.',
+      '2. انشر تبويب «الإجمالي» بصيغة CSV وانسخ رابطه، ثم تبويب «شهرياً» كذلك.',
+      `3. أضف الرابطين إلى YEARS في donors.html تحت '${year}'، ثم ارفع اللوحة.`,
+    ]);
+  } catch (error) {
+    console.error('[PUBLIC STATS] new-file mail failed:', error.message);
+  }
   const totals = ss.getSheets()[0];
   totals.setName(PUBLIC_STATS.TOTALS_TAB);
   totals.setRightToLeft(true);
