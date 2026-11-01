@@ -276,9 +276,6 @@ function computePublicStats(input) {
   const counted = (input.sheetReports || []).filter(isCountedReport);
   // A row without students is hours typed by hand, not a halaqa: pay only.
   const halaqat = counted.filter(h => h.attendance > 0);
-  const studentDays = [].concat(...input.teachers.map(t => [].concat(...t.students
-    .map(s => Object.keys(s.slots).map(k => k.split('|')[0]))))).sort();
-  const studentsFrom = studentDays.length ? studentDays[0] : '';
   const expenses = readExpenses(input.expenses);
   const pay = computeTeacherPay(counted, readRates(input.rates));
   const teachers = input.teachers.slice().sort((a, b) => (a.code > b.code ? 1 : -1));
@@ -324,8 +321,7 @@ function computePublicStats(input) {
     .concat(halaqaColumns(halaqat))
     .concat([activeTeachers(halaqat.filter(h => h.date >= activeFrom)), honors.length]));
 
-  const monthly = _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, studentsFrom,
-    honors, input);
+  const monthly = _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, honors, input);
   return { totals, monthly, pay };
 }
 
@@ -334,12 +330,10 @@ function computePublicStats(input) {
  * month keeps the rows already written for it (S-20).
  * @returns {Array<Array>}
  */
-function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, studentsFrom, honors, input) {
+function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expenses, pay, honors, input) {
   const months = Array.from(new Set(halaqat.map(h => h.month).concat(pay.map(p => p.month)))).sort();
   const honorAmounts = readHonorAmounts(input.honorAmounts);
   const firstDay = halaqat.length ? halaqat.map(h => h.date).sort((a, b) => a - b)[0] : null;
-  // The registry counts students from its first day only, so that month has no sponsorship (S-50).
-  const partialMonth = studentsFrom && studentsFrom.slice(8) !== '01' ? studentsFrom.slice(0, 7) : '';
   const fixedItems = readFixedExpenses(input.fixed);
   const fixedTotal = Object.keys(fixedItems).reduce((a, k) => a + fixedItems[k], 0);
   const frozen = input.frozenMonthly || {};
@@ -399,7 +393,8 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
       total,
       total === '' ? '' : PUBLIC_STATS.CURRENCY,
       total !== '' && hours ? _round(total / hours) : '',
-      total !== '' && sp.attended && month !== partialMonth ? _round(total / sp.attended) : '',
+      // Over the students the registry has counted, even in its first, partial month (Kamal, 2026-11-01).
+      total !== '' && sp.attended ? _round(total / sp.attended) : '',
       monthHonors.length,
     ]));
   });

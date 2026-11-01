@@ -672,8 +672,8 @@ function _testPublicStats() {
       sheetReports: sample.sheetReports.slice(1),
       teachers: [{ name: 'محمد نبيل', code: 'T001', students: [{ key: 'a', name: 'حمزة علاء',
         gender: STUDENT_GENDER.MALE, slots: { '2026-10-25|صباحية|1': ['أطفال', 0, 0] } }] }] }));
-    _eq(lateStart.monthly.find(r => r[2] === PUBLIC_STATS.ACADEMY).slice(14, 18), [920, 'EGP', 368, ''],
-      'the first month of the registry, begun after the 1st, has no sponsorship');
+    _eq(lateStart.monthly.find(r => r[2] === PUBLIC_STATS.ACADEMY).slice(14, 18), [920, 'EGP', 368, 920],
+      'the first month of the registry, begun after the 1st, has sponsorship over the students it counted');
     _eq(month('2026-10', 'T001').slice(14, 18), ['', '', '', ''], 'no expense or pay on teacher rows');
     const partial = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { rates: [['محمد نبيل', 100]] }));
     const academy = m => partial.monthly.find(r => r[0] === m && r[2] === PUBLIC_STATS.ACADEMY);
