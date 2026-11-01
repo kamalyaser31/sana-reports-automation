@@ -18,13 +18,11 @@ const API = {
   SESSION_SECONDS: 6 * 60 * 60,
   MAX_FAILS:       10,
   LOCK_SECONDS:    15 * 60,
-  LOGIN_WAIT_MS:   5000,
   NAME_MAX:        40,
   FAILS_KEY:       'api_fails',
   LOCK_KEY:        'api_locked',
   SESSION_PREFIX:  'api_session_',
   PAY_PASSWORD_KEY: 'PAY_PASSWORD',
-  PAY_SECONDS:      30 * 60,
   MAX_PAIRS:        50,
   PAY_FAILS_KEY:    'api_pay_fails',
   PAY_LOCK_KEY:     'api_pay_locked',
@@ -162,9 +160,6 @@ function doPost(e) {
       password: _getSecret(API.PASSWORD_KEY),
       payPassword: _getSecret(API.PAY_PASSWORD_KEY),
       cache: CacheService.getScriptCache(),
-      // The form's document lock: shared by every anonymous call, and not the
-      // script lock the report pipeline waits on for minutes.
-      loginLock: LockService.getDocumentLock() || LockService.getUserLock(),
     });
   } catch (error) {
     reply = { ok: false, error: String(error && error.message || error), auth: !!(error && error.auth) };
@@ -197,20 +192,19 @@ function parseApiRequest(contents) {
 }
 
 /**
- * Runs one checked request. deps carries the two passwords, the cache and the
- * login lock, so tests can pass their own.
+ * Runs one checked request. deps carries the two passwords and the cache, so
+ * tests can pass their own.
  * @param {Object} request - From parseApiRequest.
- * @param {{password: string, payPassword: string, cache: Object, loginLock: Object}} deps
+ * @param {{password: string, payPassword: string, cache: Object}} deps
  * @returns {Object}
  */
 function handleApiRequest(request, deps) {
   if (request.action === 'login') {
-    return _serialized(deps, () => Object.assign({ ok: true },
-      apiLogin(request.args.name, request.args.password, deps.password, deps.cache)));
+    return Object.assign({ ok: true }, apiLogin(request.args.name, request.args.password, deps.password, deps.cache));
   }
   const session = apiSession(request.token, deps.password, deps.cache);
   if (request.action === 'unlockPay') {
-    _serialized(deps, () => apiUnlockPay(session, request.token, request.args.password, deps.payPassword, deps.cache));
+    apiUnlockPay(session, request.token, request.args.password, deps.payPassword, deps.cache);
   }
   if (request.action === 'lockPay') apiLockPay(session, request.token, deps.cache);
   const payOpen = apiPayOpen(session, deps.payPassword);
@@ -223,16 +217,8 @@ function handleApiRequest(request, deps) {
       reply = _runWrite(API_WRITES[request.action], request, session.name, payOpen);
     }
     reply.data.payOpen = payOpen;
-    reply.data.payUntil = payOpen ? _clock(session.payUntil) : '';
     return reply;
   });
-}
-
-/** Runs fn under the login lock: parallel tries would all read one failure count. */
-function _serialized(deps, fn) {
-  if (!deps.loginLock.tryLock(API.LOGIN_WAIT_MS)) throw _authError('الدخول مشغول الآن؛ أعد المحاولة بعد لحظة.');
-  try { return fn(); }
-  finally { deps.loginLock.releaseLock(); }
 }
 
 /**
@@ -262,11 +248,6 @@ function _runWrite(write, request, name, payOpen) {
   return { ok: true, outcome: result && result.outcome, data };
 }
 
-/** "hh:mm" of a time in ms. */
-function _clock(ms) {
-  const d = new Date(ms);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
 
 // ============================================================================
 // 2. PASSWORD AND SESSIONS (S-41, S-42)
@@ -283,14 +264,6 @@ function _authError(message) {
 function _sha256Hex(text) {
   const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(text), Utilities.Charset.UTF_8);
   return bytes.map(b => ((b + 256) % 256).toString(16).padStart(2, '0')).join('');
-}
-
-/** Compares two equal-length hex digests without stopping at the first difference. */
-function _sameDigest(a, b) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
 }
 
 /**
@@ -328,7 +301,7 @@ function apiLogin(name, password, configured, cache) {
   if (cache.get(API.LOCK_KEY)) throw _authError('أُقفل الدخول ربع ساعة بعد محاولات خاطئة كثيرة.');
   if (who.length < 2 || who.length > API.NAME_MAX) throw _authError('اكتب اسمك (من حرفين إلى أربعين).');
 
-  if (!_sameDigest(_sha256Hex(password || ''), _sha256Hex(configured))) {
+  if (String(password || '') !== configured) {
     _countFailure(cache, API.FAILS_KEY, API.LOCK_KEY);
     throw _authError('كلمة المرور خطأ.');
   }
@@ -350,14 +323,15 @@ function apiSession(token, configured, cache) {
   const raw = token && configured ? cache.get(API.SESSION_PREFIX + token) : null;
   let session = null;
   try { session = raw ? JSON.parse(raw) : null; } catch (e) { session = null; }
-  if (!session || !_sameDigest(String(session.pw || ''), _sha256Hex(configured)) || !(session.until > Date.now())) {
+  if (!session || session.pw !== _sha256Hex(configured) || !(session.until > Date.now())) {
     throw _authError('انتهت الجلسة؛ ادخل من جديد.');
   }
   return session;
 }
 
 /**
- * Opens rates and pay for this session for PAY_SECONDS (S-47). Its errors keep
+ * Opens rates and pay for the rest of this session, until logout or «أقفل الرواتب»
+ * (S-47; no half-hour limit since Kamal, 2026-11-01). Its errors keep
  * the admin logged in.
  * @param {Object} session - From apiSession.
  * @param {string} token
@@ -369,12 +343,12 @@ function apiUnlockPay(session, token, password, payConfigured, cache) {
   const configured = String(payConfigured || '').trim();
   if (!configured) throw new Error('لم تُضبط كلمة مرور الرواتب بعد.');
   if (cache.get(API.PAY_LOCK_KEY)) throw new Error('أُقفل فتح الرواتب ربع ساعة بعد محاولات خاطئة كثيرة.');
-  if (!_sameDigest(_sha256Hex(password || ''), _sha256Hex(configured))) {
+  if (String(password || '') !== configured) {
     _countFailure(cache, API.PAY_FAILS_KEY, API.PAY_LOCK_KEY);
     throw new Error('كلمة مرور الرواتب خطأ.');
   }
   cache.remove(API.PAY_FAILS_KEY);
-  session.payUntil = Math.min(Date.now() + API.PAY_SECONDS * 1000, session.until);
+  session.payUntil = session.until;
   session.payPw = _sha256Hex(configured);
   _putSession(token, session, cache);
 }
@@ -395,5 +369,5 @@ function apiLockPay(session, token, cache) {
 function apiPayOpen(session, payConfigured) {
   const configured = String(payConfigured || '').trim();
   return !!configured && session.payUntil > Date.now()
-    && _sameDigest(String(session.payPw || ''), _sha256Hex(configured));
+    && session.payPw === _sha256Hex(configured);
 }

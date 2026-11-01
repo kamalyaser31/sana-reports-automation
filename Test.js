@@ -959,18 +959,6 @@ function _testApi() {
     _eq(apiSession(apiLogin('أحمد', 'secret', ' secret ', cache).token, 'secret ', cache).name, 'أحمد',
       'spaces around the stored password ignored');
 
-    _section('قفل الدخول');
-    const busy = _memoryCache();
-    const lockHeld = { tryLock: () => false, releaseLock() {} };
-    const login = { action: 'login', token: '', year: '2026', args: { name: 'أحمد', password: 'wrong' } };
-    _eq(throws(() => handleApiRequest(login, { password: 'secret', cache: busy, loginLock: lockHeld })), 'auth',
-      'login refused while the lock is held');
-    _isNull(busy.get(API.FAILS_KEY), 'a refused try does not touch the counter');
-    let released = 0;
-    const freeLock = { tryLock: () => true, releaseLock: () => { released++; } };
-    throws(() => handleApiRequest(login, { password: 'secret', cache: busy, loginLock: freeLock }));
-    _eq([busy.get(API.FAILS_KEY), released], ['1', 1], 'a wrong try counts once and releases the lock');
-
     _section('منع التخمين');
     const guarded = _memoryCache();
     for (let i = 0; i < API.MAX_FAILS; i++) throws(() => apiLogin('أحمد', 'wrong', 'secret', guarded));
@@ -981,8 +969,7 @@ function _testApi() {
 
     _section('كلمة مرور الرواتب (S-47)');
     const payCache = _memoryCache();
-    const free = { tryLock: () => true, releaseLock() {} };
-    const payDeps = { password: 'secret', payPassword: 'money', cache: payCache, loginLock: free };
+    const payDeps = { password: 'secret', payPassword: 'money', cache: payCache };
     const tok = apiLogin('منى', 'secret', 'secret', payCache).token;
     const sess = () => apiSession(tok, 'secret', payCache);
     _ok(!apiPayOpen(sess(), 'money'), 'pay closed after login');
@@ -993,7 +980,7 @@ function _testApi() {
     apiUnlockPay(sess(), tok, 'money', 'money ', payCache);
     _ok(apiPayOpen(sess(), 'money'), 'pay open with its password');
     _ok(!apiPayOpen(sess(), 'changed'), 'a new pay password closes pay');
-    _ok(sess().payUntil - Date.now() <= API.PAY_SECONDS * 1000, 'pay open for half an hour at most');
+    _eq(sess().payUntil, sess().until, 'pay stays open for the rest of the session');
     apiLockPay(sess(), tok, payCache);
     _ok(!apiPayOpen(sess(), 'money'), 'lock closes pay');
     _eq(throws(() => apiUnlockPay(sess(), tok, 'x', '', payCache)), 'error', 'no pay password configured → no unlock');
@@ -1417,8 +1404,7 @@ function integrationTest_Api() {
     'التقرير': _buildTestReport('06-09-2026', 'صباحية', 3, `${tag}6`, _sampleStudentText([{ name: `منير ${tag}` }])),
     'ملاحظات خاصة للإدارة': '',
   });
-  const deps = { password: `pass-${tag}`, payPassword: `pay-${tag}`, cache: _memoryCache(),
-    loginLock: LockService.getDocumentLock() || LockService.getUserLock() };
+  const deps = { password: `pass-${tag}`, payPassword: `pay-${tag}`, cache: _memoryCache() };
   const call = (action, args, token) => handleApiRequest(
     { action, token: token || '', test: true, year: '2026', args: args || {} }, deps);
 
@@ -1476,8 +1462,7 @@ function integrationTest_ReportEdits() {
       _sampleStudentText([{ name: `ياسر ${tag}` }])),
     'ملاحظات خاصة للإدارة': '',
   });
-  const deps = { password: `pass-${tag}`, payPassword: `pay-${tag}`, cache: _memoryCache(),
-    loginLock: LockService.getDocumentLock() || LockService.getUserLock() };
+  const deps = { password: `pass-${tag}`, payPassword: `pay-${tag}`, cache: _memoryCache() };
   const call = (action, args, token) => handleApiRequest(
     { action, token: token || '', test: true, year, args: args || {} }, deps);
   const refusal = (action, args) => {
@@ -1549,8 +1534,7 @@ function integrationTest_Honors() {
       _sampleStudentText([{ name: `نور ${tag}`, female: true }])),
     'ملاحظات خاصة للإدارة': '',
   });
-  const deps = { password: `pass-${tag}`, payPassword: `pay-${tag}`, cache: _memoryCache(),
-    loginLock: LockService.getDocumentLock() || LockService.getUserLock() };
+  const deps = { password: `pass-${tag}`, payPassword: `pay-${tag}`, cache: _memoryCache() };
   const call = (action, args, token) => handleApiRequest(
     { action, token: token || '', test: true, year, args: args || {} }, deps);
   const refusal = (action, args) => {
