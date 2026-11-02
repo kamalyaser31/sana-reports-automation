@@ -309,6 +309,9 @@ function _testValidate() {
     _eq(reportProblems(Object.assign({}, v1, { sheetFailed: true }), new Date(2026, 8, 7)),
       ['لم يُكتب في شيت المعلم، فأضِفه باليد', 'شهر ثابت: يدخل الراتب لا الملف العام'],
       'a failed sheet write, and August after its freeze on 6 September');
+    _eq(reportProblems(Object.assign({}, v1, { sameNumberOther: true }), inAugust),
+      ['رقم الحلقة نفسه سبق إرساله لليوم نفسه بطلاب آخرين، فحُسبت حلقة مستقلة؛ راجع الرقم مع المعلم'],
+      'another halaqa sent under the same number is flagged (2026-11-02)');
 
     _section('الردود التي لم تُعالَج');
     const at = h => new Date(2026, 9, 26, h);
@@ -718,6 +721,29 @@ function _testPublicStats() {
     ];
     _eq(supersededRows(tab, '29-08-2026', 'تجويد'), [0, 1],
       'a resubmission replaces its halaqa\'s unmarked rows, whatever the date spelling (S-58)');
+    const url = id => `https://drive.google.com/file/d/${id}/view?usp=drivesdk`;
+    const links = [url('A'), url('B'), '', '', ''];
+    _eq(supersededRows(tab, '29-08-2026', 'تجويد', links, url('B')), [1],
+      'only the row of the replaced file, so another halaqa of the same number stays counted (2026-11-02)');
+    _eq(supersededRows(tab, '29-08-2026', 'تجويد', [url('A'), url('B')], url('C')), [],
+      'a linked row of another file is never replaced');
+    _eq(supersededRows(tab, '29-08-2026', 'تجويد', ['', ''], url('C')), [0, 1],
+      'rows from before the report links by label and date, as before');
+    _eq([_driveFileId(url('x-1_y')), _driveFileId('https://drive.google.com/open?id=z9'), _driveFileId('')],
+      ['x-1_y', 'z9', ''], 'file id from either Drive link form');
+
+    _section('تصحيح أم حلقة أخرى بالرقم نفسه');
+    const blocksOf = list => list.map(name => ({ name }));
+    _ok(isSameHalaqa(blocksOf(['ولاء حسن', 'هناء عماره']), blocksOf(['ولاء حسن', 'هناء عمارة'])),
+      'the same students, ة/ه aside, are a correction');
+    _ok(isSameHalaqa(blocksOf(['أ ب', 'ج د', 'هـ و', 'ز ح']), blocksOf(['أ ب', 'ج د', 'ط ي'])),
+      'half the smaller report shared: a correction that adds or drops students');
+    _ok(!isSameHalaqa(blocksOf(['قصي محمود', 'عدي محمود', 'آدم عمرو']), blocksOf(['يمنى محمد', 'فاطمة محمد'])),
+      'other students: another halaqa given the same number');
+    _ok(!isSameHalaqa(blocksOf(['أ ب', 'ج د', 'هـ و']), blocksOf(['أ ب', 'ز ح', 'ط ي'])),
+      'one shared of three is not half');
+    _ok(isSameHalaqa([], blocksOf(['أ ب'])) && isSameHalaqa(blocksOf(['أ ب']), []),
+      'a report without students is a correction, as before');
     const earlier = [
       ['29-08-2026', 'تجويد', 'كبار', '1:00', '8', '(تقرير مكرر) أول'],
       ['الثلاثاء، ٢٩ أغسطس ٢٠٢٦', 'تجويد', 'كبار', '1:30', '8', '(تقرير مكرر)'],
@@ -1093,6 +1119,22 @@ function integrationTest_DistinctHalaqatNotDuplicate() {
   const second = submit(`${runTag}2`);
   _ok(!first.isDuplicate,  'first halaqa not a duplicate');
   _ok(!second.isDuplicate, 'second halaqa (different number) not a duplicate');
+
+  // The same number twice by mistake, with other students (2026-11-02).
+  const sameNumber = blocks => _runIntegrationSubmission({
+    'اسم المعلم': 'محمد نبيل', 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '0',
+    'التقرير': _buildTestReport('30-08-2026', 'صباحية', blocks.length, `${runTag}3`, _sampleStudentText(blocks)),
+    'ملاحظات خاصة للإدارة': '',
+  });
+  const morning = sameNumber([{ name: `قصي ${runTag}` }, { name: `عدي ${runTag}` }]);
+  const other = sameNumber([{ name: `يمنى ${runTag}`, female: true }]);
+  _ok(!morning.isDuplicate && !other.isDuplicate && other.sameNumberOther,
+    'other students under the same number: both counted, and flagged');
+  const corrected = sameNumber([{ name: `قصي ${runTag}` }, { name: `عدي ${runTag}` }, { name: `آدم ${runTag}` }]);
+  _ok(corrected.isDuplicate && corrected.replacedEarlier, 'the same students again: a correction');
+  const rows = _withMode(true, () => readTeacherSheetReports('2026', true))
+    .filter(r => r.teacher === 'محمد نبيل' && r.session.indexOf(`${runTag}3`) !== -1);
+  _eq(rows.map(r => r.duplicate), [true, false, false], 'only the corrected halaqa\'s first row is marked');
 }
 
 /** اختبار تكاملي — بيانات مفقودة: يستمر بالقيم الاحتياطية وحالة MISSING DATA. */

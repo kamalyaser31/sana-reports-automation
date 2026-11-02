@@ -208,6 +208,8 @@ function executeSubmissionPipeline(e, executionId, startTime) {
   validatedData.fileUrl        = saveResult.file.getUrl();
   validatedData.isDuplicate    = saveResult.isDuplicate;
   validatedData.duplicateIndex = saveResult.duplicateIndex;
+  validatedData.replacesUrl    = saveResult.earlier ? saveResult.earlier.getUrl() : '';
+  validatedData.sameNumberOther = saveResult.sameNumberOther;
 
   verifySavedFile(saveResult.file);
 
@@ -878,13 +880,32 @@ function markSupersededFile(earlier, newerUrl) {
 // ============================================================================
 
 /**
+ * Whether a report resent under an earlier one's name (date, period, number)
+ * corrects it, rather than being another halaqa given the same number by
+ * mistake (Kamal, 2026-11-02): at least half the students of the smaller
+ * report are in both. A report without students is a correction, as before.
+ * @param {Array<{name: string}>} earlierStudents - From parseStudentBlocks.
+ * @param {Array<{name: string}>} students
+ * @returns {boolean}
+ */
+function isSameHalaqa(earlierStudents, students) {
+  const before = new Set(earlierStudents.map(s => studentNameKey(s.name)));
+  const now = new Set(students.map(s => studentNameKey(s.name)));
+  if (!before.size || !now.size) return true;
+  const shared = Array.from(now).filter(k => before.has(k)).length;
+  return shared * 2 >= Math.min(before.size, now.size);
+}
+
+/**
  * Saves Markdown file to the Month folder with collision-safe naming.
  * Returns a value object — does NOT mutate the data argument (CQS).
  * @param {GoogleAppsScript.Drive.Folder} monthFolder
  * @param {Object} data
  * @param {string} content
  * @returns {{ file: GoogleAppsScript.Drive.File, isDuplicate: boolean, duplicateIndex: number,
- *   earlier: ?GoogleAppsScript.Drive.File }} earlier is the latest file of the same halaqa.
+ *   earlier: ?GoogleAppsScript.Drive.File, sameNumberOther: boolean }} earlier is the latest
+ *   file of the same name whose students match (isSameHalaqa); sameNumberOther when the
+ *   name was taken by other students only.
  */
 function saveMarkdownFile(monthFolder, data, content) {
   // Include the halaqa number so two halaqat of the same type on the same day are not "duplicates".
@@ -892,17 +913,21 @@ function saveMarkdownFile(monthFolder, data, content) {
   const baseName = sanitizeFilename(`${data.submissionDateFormatted}_${data.sessionType}${halaPart}_${data.teacherName}`);
   let targetFilename = `${baseName}.md`;
   let duplicateIndex = 0;
-  let earlier = null;
+  const sameName = [];
   let found;
 
   while ((found = _firstNotTrashed(monthFolder.getFilesByName(targetFilename)))) {
-    earlier = found;
+    sameName.push(found);
     duplicateIndex++;
     targetFilename = `${baseName} (${duplicateIndex}).md`;
   }
 
+  const students = parseStudentBlocks(data.reportText);
+  const earlier = sameName.reverse()
+    .find(f => isSameHalaqa(parseStudentBlocks(f.getBlob().getDataAsString('UTF-8')), students)) || null;
   const blob = Utilities.newBlob(content, 'text/markdown; charset=UTF-8', targetFilename);
-  return { file: monthFolder.createFile(blob), isDuplicate: duplicateIndex > 0, duplicateIndex, earlier };
+  return { file: monthFolder.createFile(blob), isDuplicate: Boolean(earlier), duplicateIndex, earlier,
+    sameNumberOther: duplicateIndex > 0 && !earlier };
 }
 
 /**
@@ -947,17 +972,31 @@ function _slotDateKey(text) {
 
 /**
  * The rows of a monthly tab that a resubmitted report replaces (S-58): same date
- * and session label, and not marked already.
+ * and session label, and not marked already. Of those, the row linked to the
+ * replaced file only, so another halaqa given the same number stays counted
+ * (2026-11-02); rows without a link (before 27 October 2026) by label and date.
  * @param {Array<Array>} rows - Display values of columns A:F below the header.
  * @param {string} dateText
  * @param {string} label - From _sessionLabel.
+ * @param {Array<string>} [links] - Each row's report link, '' without one.
+ * @param {string} [earlierUrl] - The replaced report file.
  * @returns {number[]} Indexes into rows.
  */
-function supersededRows(rows, dateText, label) {
+function supersededRows(rows, dateText, label, links, earlierUrl) {
   const key = _slotDateKey(dateText);
-  return rows.map((r, i) => i).filter(i => String(rows[i][1]).trim() === label
+  const same = rows.map((r, i) => i).filter(i => String(rows[i][1]).trim() === label
     && _slotDateKey(rows[i][0]) === key
     && String(rows[i][5] || '').trim().indexOf(DUPLICATE_MARK) !== 0);
+  const link = i => (links || [])[i] || '';
+  const id = _driveFileId(earlierUrl);
+  const linked = same.filter(i => id && _driveFileId(link(i)) === id);
+  return linked.length ? linked : same.filter(i => !link(i));
+}
+
+/** The file id of a Drive link ("…/d/<id>/…" or "…?id=<id>"), or ''. */
+function _driveFileId(url) {
+  const m = /\/d\/([\w-]+)|[?&]id=([\w-]+)/.exec(String(url || ''));
+  return m ? m[1] || m[2] : '';
 }
 
 /**
@@ -977,8 +1016,11 @@ function recordToTeacherSheet(yearTeacherFolder, data) {
   // earlier row to replace, the report marks itself, as before.
   let replaced = [];
   if (data.isDuplicate && sheet.getLastRow() >= 2) {
-    const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues();
-    replaced = supersededRows(rows, data.reportDateText || data.submissionDateFormatted, _sessionLabel(data));
+    const n = sheet.getLastRow() - 1;
+    const rows = sheet.getRange(2, 1, n, 6).getDisplayValues();
+    const links = sheet.getRange(2, 2, n, 1).getRichTextValues().map(r => (r[0] && r[0].getLinkUrl()) || '');
+    replaced = supersededRows(rows, data.reportDateText || data.submissionDateFormatted, _sessionLabel(data),
+      links, data.replacesUrl);
     replaced.forEach(i => sheet.getRange(i + 2, 6).setValue(sheetText(`${DUPLICATE_MARK} ${rows[i][5]}`.trim())));
   }
 
@@ -1379,6 +1421,7 @@ function reportProblems(data, today) {
   if (data.sheetFailed) out.push('لم يُكتب في شيت المعلم، فأضِفه باليد');
   if (data.registryFailed) out.push('لم يُسجَّل حضور الطلاب في سجل الطلاب');
   if (data.nightlyMissing) out.push('المؤقت الليلي متوقف، فشغّل installNightlyTrigger من المحرر');
+  if (data.sameNumberOther) out.push('رقم الحلقة نفسه سبق إرساله لليوم نفسه بطلاب آخرين، فحُسبت حلقة مستقلة؛ راجع الرقم مع المعلم');
   const fromHeader = ' (من التقرير)';
   // The Telegram diagnostic sends a bare sample without missingFields.
   const header = (data.missingFields || []).filter(f => f.endsWith(fromHeader)).map(f => f.slice(0, -fromHeader.length));
