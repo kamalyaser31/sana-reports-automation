@@ -208,7 +208,6 @@ function executeSubmissionPipeline(e, executionId, startTime) {
   validatedData.fileUrl        = saveResult.file.getUrl();
   validatedData.isDuplicate    = saveResult.isDuplicate;
   validatedData.duplicateIndex = saveResult.duplicateIndex;
-  validatedData.replacesUrl    = saveResult.earlier ? saveResult.earlier.getUrl() : '';
   validatedData.sameNumberOther = saveResult.sameNumberOther;
 
   verifySavedFile(saveResult.file);
@@ -223,21 +222,11 @@ function executeSubmissionPipeline(e, executionId, startTime) {
 
   // Sheets failure is non-fatal: the Markdown file is already saved.
   try {
-    validatedData.replacedEarlier = recordToTeacherSheet(driveTarget.yearTeacherFolder, validatedData).replaced > 0;
+    recordToTeacherSheet(driveTarget.yearTeacherFolder, validatedData);
   } catch (sheetError) {
     console.error(`[SHEET WARNING] [ExecutionID: ${executionId}] Could not append to teacher sheet:`, sheetError.message);
     _safeLogToDrive(executionId, startTime, `Google Sheets Warning: ${sheetError.message}`, sheetError.stack);
     validatedData.sheetFailed = true;
-  }
-
-  // Only when the sheet counted this report in place of the earlier one (S-58);
-  // non-fatal, as the note only helps whoever opens the old file.
-  if (validatedData.replacedEarlier && saveResult.earlier) {
-    try {
-      markSupersededFile(saveResult.earlier, validatedData.fileUrl);
-    } catch (markError) {
-      _safeLogToDrive(executionId, startTime, `Superseded note failed: ${markError.message}`, markError.stack);
-    }
   }
 
   // The students registry is non-fatal too; recordStudentsSafely logs its own failures.
@@ -860,30 +849,15 @@ function generateMarkdownContent(data) {
   ].join('\n');
 }
 
-/** Heads a report file that a later resubmission of the same halaqa replaced. */
-const SUPERSEDED_NOTE = 'تنبيه: حلّ محلَّ هذا التقرير تقريرٌ أحدث للحلقة نفسها:';
-
-/**
- * Puts the superseded note, with the newer file's link, at the head of the
- * earlier report file; once only.
- * @param {GoogleAppsScript.Drive.File} earlier
- * @param {string} newerUrl
- */
-function markSupersededFile(earlier, newerUrl) {
-  const content = earlier.getBlob().getDataAsString('UTF-8');
-  if (content.indexOf(SUPERSEDED_NOTE) === 0) return;
-  earlier.setContent(`${SUPERSEDED_NOTE} ${newerUrl}\n\n${content}`);
-}
-
 // ============================================================================
 // 10. FILE SAVING & VERIFICATION
 // ============================================================================
 
 /**
- * Whether a report resent under an earlier one's name (date, period, number)
- * corrects it, rather than being another halaqa given the same number by
+ * Whether a report sent under an earlier one's name (date, period, number)
+ * repeats it, rather than being another halaqa given the same number by
  * mistake (Kamal, 2026-11-02): at least half the students of the smaller
- * report are in both. A report without students is a correction, as before.
+ * report are in both. A report without students is a repeat.
  * @param {Array<{name: string}>} earlierStudents - From parseStudentBlocks.
  * @param {Array<{name: string}>} students
  * @returns {boolean}
@@ -903,9 +877,8 @@ function isSameHalaqa(earlierStudents, students) {
  * @param {Object} data
  * @param {string} content
  * @returns {{ file: GoogleAppsScript.Drive.File, isDuplicate: boolean, duplicateIndex: number,
- *   earlier: ?GoogleAppsScript.Drive.File, sameNumberOther: boolean }} earlier is the latest
- *   file of the same name whose students match (isSameHalaqa); sameNumberOther when the
- *   name was taken by other students only.
+ *   sameNumberOther: boolean }} isDuplicate when a file of the same name has the same
+ *   students (isSameHalaqa); sameNumberOther when the name was taken by other students only.
  */
 function saveMarkdownFile(monthFolder, data, content) {
   // Include the halaqa number so two halaqat of the same type on the same day are not "duplicates".
@@ -923,11 +896,11 @@ function saveMarkdownFile(monthFolder, data, content) {
   }
 
   const students = parseStudentBlocks(data.reportText);
-  const earlier = sameName.reverse()
-    .find(f => isSameHalaqa(parseStudentBlocks(f.getBlob().getDataAsString('UTF-8')), students)) || null;
+  const isDuplicate = sameName
+    .some(f => isSameHalaqa(parseStudentBlocks(f.getBlob().getDataAsString('UTF-8')), students));
   const blob = Utilities.newBlob(content, 'text/markdown; charset=UTF-8', targetFilename);
-  return { file: monthFolder.createFile(blob), isDuplicate: Boolean(earlier), duplicateIndex, earlier,
-    sameNumberOther: duplicateIndex > 0 && !earlier };
+  return { file: monthFolder.createFile(blob), isDuplicate, duplicateIndex,
+    sameNumberOther: duplicateIndex > 0 && !isDuplicate };
 }
 
 /**
@@ -947,7 +920,7 @@ function verifySavedFile(file) {
 // 11. GOOGLE SHEETS MANAGEMENT & LOGGING
 // ============================================================================
 
-/** Begins the admin cell of a report that is not counted, as another replaced it. */
+/** Begins the admin cell of a report that is not counted, as it repeats an earlier one. */
 const DUPLICATE_MARK = '(تقرير مكرر)';
 
 /**
@@ -961,49 +934,9 @@ function sheetText(v) {
 }
 
 /**
- * A report date as one comparable key: "dd-mm-yyyy" when it can be read, else the text.
- * @param {*} text
- * @returns {string}
- */
-function _slotDateKey(text) {
-  const date = _parseReportDate(String(text || ''));
-  return date ? _formatSubmissionDate(date).dateFormatted : String(text || '').trim();
-}
-
-/**
- * The rows of a monthly tab that a resubmitted report replaces (S-58): same date
- * and session label, and not marked already. Of those, the row linked to the
- * replaced file only, so another halaqa given the same number stays counted
- * (2026-11-02); rows without a link (before 27 October 2026) by label and date.
- * @param {Array<Array>} rows - Display values of columns A:F below the header.
- * @param {string} dateText
- * @param {string} label - From _sessionLabel.
- * @param {Array<string>} [links] - Each row's report link, '' without one.
- * @param {string} [earlierUrl] - The replaced report file.
- * @returns {number[]} Indexes into rows.
- */
-function supersededRows(rows, dateText, label, links, earlierUrl) {
-  const key = _slotDateKey(dateText);
-  const same = rows.map((r, i) => i).filter(i => String(rows[i][1]).trim() === label
-    && _slotDateKey(rows[i][0]) === key
-    && String(rows[i][5] || '').trim().indexOf(DUPLICATE_MARK) !== 0);
-  const link = i => (links || [])[i] || '';
-  const id = _driveFileId(earlierUrl);
-  const linked = same.filter(i => id && _driveFileId(link(i)) === id);
-  return linked.length ? linked : same.filter(i => !link(i));
-}
-
-/** The file id of a Drive link ("…/d/<id>/…" or "…?id=<id>"), or ''. */
-function _driveFileId(url) {
-  const m = /\/d\/([\w-]+)|[?&]id=([\w-]+)/.exec(String(url || ''));
-  return m ? m[1] || m[2] : '';
-}
-
-/**
  * Records the session into the Teacher's yearly Google Sheet under the monthly tab.
  * @param {GoogleAppsScript.Drive.Folder} yearTeacherFolder
  * @param {Object} data
- * @returns {{ replaced: number }} Earlier rows this report replaced.
  */
 function recordToTeacherSheet(yearTeacherFolder, data) {
   const spreadsheet = getOrCreateTeacherSpreadsheet(yearTeacherFolder, data.teacherName, data.submissionYear);
@@ -1011,22 +944,10 @@ function recordToTeacherSheet(yearTeacherFolder, data) {
 
   removeSummaryRows(sheet);
 
-  // A resubmission is usually a correction, so the last report of a halaqa is the
-  // one counted and paid: the earlier rows are marked instead (S-58). Without an
-  // earlier row to replace, the report marks itself, as before.
-  let replaced = [];
-  if (data.isDuplicate && sheet.getLastRow() >= 2) {
-    const n = sheet.getLastRow() - 1;
-    const rows = sheet.getRange(2, 1, n, 6).getDisplayValues();
-    const links = sheet.getRange(2, 2, n, 1).getRichTextValues().map(r => (r[0] && r[0].getLinkUrl()) || '');
-    replaced = supersededRows(rows, data.reportDateText || data.submissionDateFormatted, _sessionLabel(data),
-      links, data.replacesUrl);
-    replaced.forEach(i => sheet.getRange(i + 2, 6).setValue(sheetText(`${DUPLICATE_MARK} ${rows[i][5]}`.trim())));
-  }
-
   // Duration stored as a day fraction so SUM/AVERAGE work natively in Sheets.
   const durationDayFraction = (data.durationHours / 24) + (data.durationMinutes / 1440);
-  const adminCellValue = data.isDuplicate && !replaced.length
+  // A halaqa sent twice counts once: the first report; the repeat marks itself (2026-11-02).
+  const adminCellValue = data.isDuplicate
     ? `${DUPLICATE_MARK} ${data.adminNotes || ''}`.trim()
     : (data.adminNotes || '');
 
@@ -1051,7 +972,6 @@ function recordToTeacherSheet(yearTeacherFolder, data) {
   }
 
   appendSummaryRows(sheet);
-  return { replaced: replaced.length };
 }
 
 /**
@@ -1465,10 +1385,7 @@ function sendTelegramNotification(data) {
   const problems = reportProblems(data, new Date());
   if (problems.length) messageLines.splice(1, 0, `⚠️ <b>تنبيه:</b> ${escapeHtml(problems.join('، '))}`);
 
-  // Says which report of a resent halaqa counts (S-58), so the admin need not open the sheet.
-  if (data.replacedEarlier) {
-    messageLines.push('• <b>إعادة إرسال:</b> يحل محل التقرير السابق لهذه الحلقة، وهذا المحسوب الآن.');
-  } else if (data.isDuplicate) {
+  if (data.isDuplicate) {
     messageLines.push('• <b>مكرر:</b> لن يُحسب في الساعات.');
   }
   if (data.newStudents && data.newStudents.length) {

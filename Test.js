@@ -712,47 +712,19 @@ function _testPublicStats() {
         try { parseReportEdit({ hours, minutes, students }); return true; } catch (e) { return false; }
       });
     _eq(editRefusals, [], 'over five hours, zero, 60 minutes, fractions and a missing count refused');
-    const tab = [
-      ['29-08-2026', 'تجويد', 'كبار', '1:00', '8', ''],
-      ['الثلاثاء، ٢٩ أغسطس ٢٠٢٦', 'تجويد', 'كبار', '1:30', '8', 'ملاحظة'],
-      ['29-08-2026', 'تجويد', 'كبار', '1:00', '8', '(تقرير مكرر)'],
-      ['29-08-2026', 'صباحية', 'كبار', '1:00', '8', ''],
-      ['30-08-2026', 'تجويد', 'كبار', '1:00', '8', ''],
-    ];
-    _eq(supersededRows(tab, '29-08-2026', 'تجويد'), [0, 1],
-      'a resubmission replaces its halaqa\'s unmarked rows, whatever the date spelling (S-58)');
-    const url = id => `https://drive.google.com/file/d/${id}/view?usp=drivesdk`;
-    const links = [url('A'), url('B'), '', '', ''];
-    _eq(supersededRows(tab, '29-08-2026', 'تجويد', links, url('B')), [1],
-      'only the row of the replaced file, so another halaqa of the same number stays counted (2026-11-02)');
-    _eq(supersededRows(tab, '29-08-2026', 'تجويد', [url('A'), url('B')], url('C')), [],
-      'a linked row of another file is never replaced');
-    _eq(supersededRows(tab, '29-08-2026', 'تجويد', ['', ''], url('C')), [0, 1],
-      'rows from before the report links by label and date, as before');
-    _eq([_driveFileId(url('x-1_y')), _driveFileId('https://drive.google.com/open?id=z9'), _driveFileId('')],
-      ['x-1_y', 'z9', ''], 'file id from either Drive link form');
 
-    _section('تصحيح أم حلقة أخرى بالرقم نفسه');
+    _section('تكرار أم حلقة أخرى بالرقم نفسه');
     const blocksOf = list => list.map(name => ({ name }));
     _ok(isSameHalaqa(blocksOf(['ولاء حسن', 'هناء عماره']), blocksOf(['ولاء حسن', 'هناء عمارة'])),
-      'the same students, ة/ه aside, are a correction');
+      'the same students, ة/ه aside, are a repeat');
     _ok(isSameHalaqa(blocksOf(['أ ب', 'ج د', 'هـ و', 'ز ح']), blocksOf(['أ ب', 'ج د', 'ط ي'])),
-      'half the smaller report shared: a correction that adds or drops students');
+      'half the smaller report shared: a repeat');
     _ok(!isSameHalaqa(blocksOf(['قصي محمود', 'عدي محمود', 'آدم عمرو']), blocksOf(['يمنى محمد', 'فاطمة محمد'])),
       'other students: another halaqa given the same number');
     _ok(!isSameHalaqa(blocksOf(['أ ب', 'ج د', 'هـ و']), blocksOf(['أ ب', 'ز ح', 'ط ي'])),
       'one shared of three is not half');
     _ok(isSameHalaqa([], blocksOf(['أ ب'])) && isSameHalaqa(blocksOf(['أ ب']), []),
-      'a report without students is a correction, as before');
-    const earlier = [
-      ['29-08-2026', 'تجويد', 'كبار', '1:00', '8', '(تقرير مكرر) أول'],
-      ['الثلاثاء، ٢٩ أغسطس ٢٠٢٦', 'تجويد', 'كبار', '1:30', '8', '(تقرير مكرر)'],
-      ['29-08-2026', 'صباحية', 'كبار', '1:00', '8', '(تقرير مكرر)'],
-    ];
-    const counted = ['29-08-2026', 'تجويد', 'كبار', '1:00', '8', ''];
-    _eq([restoredRow(earlier, counted), restoredRow(earlier, earlier[0]),
-      restoredRow(earlier.concat([counted]), counted)], [1, -1, -1],
-      'deleting the counted report restores its halaqa\'s last earlier one; a marked or still-counted halaqa none (F-04)');
+      'a report without students is a repeat');
     _eq(['=1+1', '+20', '-غاب', '@x', 'حضر', 5].map(sheetText), ["'=1+1", "'+20", "'-غاب", "'@x", 'حضر', 5],
       'form text that Sheets would read as a formula stays text (F-08)');
     _eq(summaryRowIndexes([['1-9'], ['الإجمالي'], ['المتوسط'], ['يدوي'], [' الإجمالي '], ['المتوسط']]), [1, 2, 4, 5],
@@ -1079,24 +1051,20 @@ function integrationTest_DuplicateDetection() {
   const second = _runIntegrationSubmission(mockData);
   _ok(second.isDuplicate,         'second identical submission flagged duplicate');
   _ok(second.duplicateIndex >= 1, 'duplicate gets a (n) suffix');
-  _ok(second.replacedEarlier,     'the resubmission replaced the earlier row (S-58)');
   _TEST_MODE = true;
   try {
     const teacherFolder = getRootFolder().getFoldersByName('2026').next().getFoldersByName('محمد نبيل').next();
     const sheet = SpreadsheetApp.openById(_firstNotTrashed(teacherFolder.getFilesByName('محمد نبيل - تقارير الحلقات 2026')).getId())
       .getSheetByName('08 - أغسطس');
-    const slot = sheet.getRange(2, 1, sheet.getLastRow() - 1, 6).getDisplayValues()
-      .filter(r => _slotDateKey(r[0]) === '29-08-2026' && r[1] === 'تجويد');
-    const counted = slot.map((r, i) => (String(r[5]).indexOf(DUPLICATE_MARK) === 0 ? -1 : i)).filter(i => i !== -1);
-    _eq(counted, [slot.length - 1], 'only the last report of the halaqa is counted');
-    const links = _readTab(sheet, 'محمد نبيل', '2026-08').map(r => r.link);
-    _eq(links.slice(-2), [first.fileUrl, second.fileUrl], 'each row links to its own report file');
+    const rows = _readTab(sheet, 'محمد نبيل', '2026-08');
+    _eq(rows.slice(-2).map(r => r.link), [first.fileUrl, second.fileUrl], 'each row links to its own report file');
+    _eq(rows.slice(-2).map(r => r.duplicate), [first.isDuplicate, true],
+      'the repeat marks itself and leaves the earlier row as it was (2026-11-02)');
     const monthFolder = teacherFolder.getFoldersByName('08 - أغسطس').next();
     const text = name => _firstNotTrashed(monthFolder.getFilesByName(name)).getBlob().getDataAsString('UTF-8');
     const base = '29-08-2026_تجويد_محمد نبيل';
     const nameAt = n => (n ? `${base} (${n}).md` : `${base}.md`);
-    _ok(text(nameAt(second.duplicateIndex - 1)).indexOf(`${SUPERSEDED_NOTE} ${second.fileUrl}`) === 0,
-      'the earlier file names its replacement');
+    _ok(text(nameAt(second.duplicateIndex - 1)).indexOf('# تجويد') === 0, 'the earlier file is not touched');
     _ok(text(nameAt(second.duplicateIndex)).indexOf('# تجويد — محمد نبيل — 29-08-2026') === 0,
       'the new file opens with its heading');
   } finally {
@@ -1130,11 +1098,11 @@ function integrationTest_DistinctHalaqatNotDuplicate() {
   const other = sameNumber([{ name: `يمنى ${runTag}`, female: true }]);
   _ok(!morning.isDuplicate && !other.isDuplicate && other.sameNumberOther,
     'other students under the same number: both counted, and flagged');
-  const corrected = sameNumber([{ name: `قصي ${runTag}` }, { name: `عدي ${runTag}` }, { name: `آدم ${runTag}` }]);
-  _ok(corrected.isDuplicate && corrected.replacedEarlier, 'the same students again: a correction');
+  const repeated = sameNumber([{ name: `قصي ${runTag}` }, { name: `عدي ${runTag}` }, { name: `آدم ${runTag}` }]);
+  _ok(repeated.isDuplicate, 'the same students again: a repeat');
   const rows = _withMode(true, () => readTeacherSheetReports('2026', true))
     .filter(r => r.teacher === 'محمد نبيل' && r.session.indexOf(`${runTag}3`) !== -1);
-  _eq(rows.map(r => r.duplicate), [true, false, false], 'only the corrected halaqa\'s first row is marked');
+  _eq(rows.map(r => r.duplicate), [false, false, true], 'only the repeat is marked; the first report counts');
 }
 
 /** اختبار تكاملي — بيانات مفقودة: يستمر بالقيم الاحتياطية وحالة MISSING DATA. */
@@ -1520,7 +1488,7 @@ function integrationTest_ReportEdits() {
   _eq(last < 2 ? [] : tab.getRange(last - 1, 1, 2, 1).getValues().map(r => r[0]),
     last < 2 ? [] : ['الإجمالي', 'المتوسط'], 'total and average rebuilt after a delete');
 
-  // A halaqa sent twice: deleting the counted report brings the earlier one back (F-04).
+  // A halaqa sent twice: the first counts, and deleting the repeat leaves it counted (2026-11-02).
   const twice = {
     'اسم المعلم': teacher, 'فئة الطلاب': 'أطفال', 'الساعات': '1', 'الدقائق': '0',
     'التقرير': _buildTestReport(`${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${year}`, 'صباحية', 2, `${tag}9`,
@@ -1531,10 +1499,10 @@ function integrationTest_ReportEdits() {
   _runIntegrationSubmission(twice);
   const halaqa = d => d.reports.filter(r => r.teacher === teacher && r.session === `صباحية (حلقة ${tag}9)`);
   const pair = halaqa(call('data', {}, token).data);
-  _eq(pair.map(r => r.status), ['مكرر', ''], 'the resubmission counts and the first is marked (S-58)');
+  _eq(pair.map(r => r.status), ['', 'مكرر'], 'the first report counts and the repeat is marked');
   const kept = halaqa(call('deleteReport', { teacher, month: pair[1].month, row: pair[1].row, stamp: pair[1].stamp }, token).data);
   _eq(kept.map(r => [r.status, r.notes.indexOf(DUPLICATE_MARK)]), [['', -1]],
-    'after deleting the counted one, the earlier report counts again');
+    'after deleting the repeat, the first report still counts');
 }
 
 /** اختبار تكاملي — تكريم طالب وحذفه ومبلغ التكريم عبر الـ API (S-60). */
@@ -1640,14 +1608,14 @@ function integrationTest_SheetFixes() {
 }
 
 /**
- * فحص حيّ قصير لإصلاحات التدقيق (F-04، F-07، F-08) في مجلد الاختبار؛ يُشغَّل وحده
+ * فحص حيّ قصير لإصلاحات التدقيق (F-07، F-08) في مجلد الاختبار؛ يُشغَّل وحده
  * لأن runAllTests صار يتجاوز حد الدقائق الست في المحرر.
  */
 function runLiveFixChecks() {
   _T = { pass: 0, fail: 0, log: [] };
   _suite('Integration: ReportEdits', integrationTest_ReportEdits);
   _suite('Integration: SheetFixes',  integrationTest_SheetFixes);
-  _report('LIVE FIX CHECKS (F-04, F-07, F-08)');
+  _report('LIVE FIX CHECKS (F-07, F-08)');
 }
 
 // ============================================================================
