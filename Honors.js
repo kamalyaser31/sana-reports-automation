@@ -130,7 +130,7 @@ function addHonor(honor, year, today) {
   }
   if (date > _isoDay(today)) throw new Error('تاريخ التكريم لم يأتِ بعد.');
   if (isMonthFrozen(date.substring(0, 7), today)) {
-    throw new Error(`شهر ${date.substring(0, 7)} ثابت بعد الخامس من الشهر التالي، فلا يُضاف فيه تكريم.`);
+    throw new Error(`شهر ${date.substring(0, 7)} ثابت منذ الثالث من الشهر التالي، فلا يُضاف فيه تكريم.`);
   }
   const reason = String(honor.reason || '').trim();
   if (reason.length > HONORS.REASON_MAX) throw new Error(`السبب ${HONORS.REASON_MAX} حرف على الأكثر.`);
@@ -168,7 +168,7 @@ function deleteHonor(ref, year, today) {
       throw new Error('تغيّرت التكريمات منذ حُمّلت الصفحة؛ حدّث الصفحة ثم أعد المحاولة.');
     }
     if (isMonthFrozen(honor.month, today)) {
-      throw new Error(`شهر ${honor.month} ثابت بعد الخامس من الشهر التالي، فلا يُحذف تكريمه.`);
+      throw new Error(`شهر ${honor.month} ثابت منذ الثالث من الشهر التالي، فلا يُحذف تكريمه.`);
     }
     sheet.deleteRow(honor.row);
     return honor;

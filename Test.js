@@ -302,7 +302,7 @@ function _testValidate() {
     _eq(v2.reportText,    CONFIG.FALLBACKS.REPORT_TEXT,  'fallback report text');
 
     _section('تنبيه رسالة Telegram');
-    const inAugust = new Date(2026, 8, 3);
+    const inAugust = new Date(2026, 8, 2);
     _eq(reportProblems(v1, inAugust), [], 'a full report in an open month has no problem');
     _eq(reportProblems(v2, inAugust), ['ينقص من ترويسة التقرير: نوع الحلقة، تاريخ التقرير، عدد الطلاب'],
       'a report without the app header names the missing lines');
@@ -561,6 +561,8 @@ function _sampleStatsInput(today, extra) {
     ],
     fixed: [['إدارة الأكاديمية', 200]],
     today,
+    // Every month counts its students, unless a test says otherwise.
+    studentsFrom: '',
   }, extra || {});
 }
 
@@ -598,8 +600,18 @@ function _testPublicStats() {
     _eq(month('2026-10', 'T001').slice(3, 7), [1, 2, 1, 1], 'new, attended, continuing, ratio');
     const ac = month('2026-10', 'الأكاديمية');
     _eq(ac.slice(3, 14), [3, 4, 1, 1, 2, 2.5, 4, 2, 1, 1, 2], 'academy month');
-    _eq(ac.slice(14, 18), [920, 'EGP', 368, 230],
-      'expense = pay 220 + fixed 200 + other 500; ÷ 2.5 sheet hours; sponsorship over 4 students');
+    _eq(ac.slice(14, 18), ['', '', '', ''], 'the month in progress has no expense or sponsorship yet (2026-11-03)');
+    const closed = computePublicStats(_sampleStatsInput(new Date(2026, 10, 1)));
+    _eq(closed.monthly.find(r => r[0] === '2026-10' && r[2] === PUBLIC_STATS.ACADEMY).slice(14, 18), [920, 'EGP', 368, 230],
+      'once ended: expense = pay 220 + fixed 200 + other 500; ÷ 2.5 sheet hours; sponsorship over 4 students');
+
+    _section('الطلاب قبل بدء عدّهم');
+    const early = computePublicStats(_sampleStatsInput(new Date(2026, 10, 1),
+      { studentsFrom: '2026-10' }));
+    const em = (m, code) => early.monthly.find(r => r[0] === m && r[2] === code).slice(3, 7);
+    _eq([em('2026-09', 'الأكاديمية'), em('2026-09', 'T001')], [['', '', '', ''], ['', '', '', '']],
+      'before the count: no students, for the academy or a teacher');
+    _eq(em('2026-10', 'الأكاديمية'), ['', 4, '', ''], 'the first counted month: students, but no new or retention');
     _eq(month('2026-09', 'الأكاديمية').slice(14, 18), ['', '', '', ''], 'no expense before October 2026 (S-50)');
 
     _section('يناير وطلاب السنة الماضية');
@@ -632,7 +644,7 @@ function _testPublicStats() {
     const academyOf = (stats, m) => stats.monthly.find(r => r[0] === m && r[2] === PUBLIC_STATS.ACADEMY);
     _eq([academyOf(listed, '2026-09')[7], academyOf(listed, '2026-10')[7]], [1, 3],
       'September counts only its listed teachers; October counts everyone (S-54)');
-    const plain = _sampleStatsInput(new Date(2026, 9, 20));
+    const plain = _sampleStatsInput(new Date(2026, 10, 1));
     const handHours = computePublicStats(Object.assign(plain, {
       sheetReports: plain.sheetReports.concat([
         { teacher: 'محمد نبيل', date: new Date(2026, 9, 1), month: '2026-10', category: '', minutes: 60, attendance: 0 },
@@ -641,7 +653,7 @@ function _testPublicStats() {
       'hours without students add pay, not a halaqa or its hours, and the hour cost is over the hours shown');
     _ok(!isCountedReport({ teacher: CONFIG.FALLBACKS.TEACHER_NAME, month: '2026-10', minutes: 60, duplicate: false }),
       'a report without a teacher\'s name is not counted (S-57)');
-    const sample = _sampleStatsInput(new Date(2026, 9, 20));
+    const sample = _sampleStatsInput(new Date(2026, 10, 1));
     const lateStart = computePublicStats(Object.assign(sample, {
       sheetReports: sample.sheetReports.slice(1),
       teachers: [{ name: 'محمد نبيل', code: 'T001', students: [{ key: 'a', name: 'حمزة علاء',
@@ -649,10 +661,10 @@ function _testPublicStats() {
     _eq(lateStart.monthly.find(r => r[2] === PUBLIC_STATS.ACADEMY).slice(14, 18), [920, 'EGP', 368, 920],
       'the first month of the registry, begun after the 1st, has sponsorship over the students it counted');
     _eq(month('2026-10', 'T001').slice(14, 18), ['', '', '', ''], 'no expense or pay on teacher rows');
-    const partial = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { rates: [['محمد نبيل', 100]] }));
+    const partial = computePublicStats(_sampleStatsInput(new Date(2026, 10, 1), { rates: [['محمد نبيل', 100]] }));
     const academy = m => partial.monthly.find(r => r[0] === m && r[2] === PUBLIC_STATS.ACADEMY);
     _eq(academy('2026-10').slice(14, 18), ['', '', '', ''], 'a teacher with halaqat and no rate blanks the expense');
-    const allPriced = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { fixed: [] }));
+    const allPriced = computePublicStats(_sampleStatsInput(new Date(2026, 10, 1), { fixed: [] }));
     _eq(allPriced.monthly.find(r => r[0] === '2026-10' && r[2] === PUBLIC_STATS.ACADEMY)[14], 720,
       'no fixed expenses → pay and other expenses only');
 
@@ -667,14 +679,14 @@ function _testPublicStats() {
     const amounts = readHonorAmounts([['2026-11', 80], [new Date(2026, 9, 1), 50]]);
     _eq(['2026-09', '2026-10', '2026-12'].map(m => honorAmountFor(m, amounts)).concat([honorAmountFor('2026-10', [])]),
       [50, 50, 80, ''], 'an amount holds from its month; earlier months take the first; none before any');
-    const honored = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20),
+    const honored = computePublicStats(_sampleStatsInput(new Date(2026, 10, 1),
       { honors: _sampleHonorRows(), honorAmounts: [['2026-10', 50]] }));
     const hm = (m, code) => honored.monthly.find(r => r[0] === m && r[2] === code);
     _eq([hm('2026-10', 'الأكاديمية')[14], hm('2026-10', 'الأكاديمية')[18], hm('2026-10', 'T001')[18],
       hm('2026-09', 'الأكاديمية')[18]], [1070, 3, 2, 1],
       'honors: 3 × 50 added to the expense, counted per month and per teacher (S-60)');
     _eq(['T001', 'الأكاديمية'].map(c => honored.totals.find(r => r[0] === c)[14]), [3, 4], 'honors in the totals');
-    const unpricedHonors = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { honors: _sampleHonorRows() }));
+    const unpricedHonors = computePublicStats(_sampleStatsInput(new Date(2026, 10, 1), { honors: _sampleHonorRows() }));
     _eq(unpricedHonors.monthly.find(r => r[0] === '2026-10' && r[2] === PUBLIC_STATS.ACADEMY)[14], '',
       'honors without an amount blank the expense');
 
@@ -743,13 +755,17 @@ function _testPublicStats() {
       'blank, non-positive and nameless rates read as no rate');
 
     _section('اللقطة الثابتة');
-    _ok(!isMonthFrozen('2026-09', new Date(2026, 9, 5)), 'not frozen on the 5th');
-    _ok(isMonthFrozen('2026-09', new Date(2026, 9, 6)), 'frozen from the 6th');
+    _ok(!isMonthFrozen('2026-09', new Date(2026, 9, 2, 23)), 'not frozen on the 2nd');
+    _ok(isMonthFrozen('2026-09', new Date(2026, 9, 3)), 'frozen from the 3rd (2026-11-03)');
     const marker = ['2026-09', '', 'T001', 99];
     const frozen = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { frozenMonthly: { '2026-09': [marker] } }));
     _eq(frozen.monthly.filter(r => r[0] === '2026-09'), [marker], 'frozen month keeps its written rows');
     const open = computePublicStats(_sampleStatsInput(new Date(2026, 9, 20), { frozenMonthly: { '2026-10': [marker] } }));
     _ok(open.monthly.filter(r => r[0] === '2026-10').length === 3, 'open month is recomputed');
+    const night = today => computePublicStats(_sampleStatsInput(today, { frozenMonthly: { '2026-09': [marker] } }))
+      .monthly.filter(r => r[0] === '2026-09');
+    _ok(night(new Date(2026, 9, 3, 2)).length === 3, 'the run on the 3rd still writes last month, with the 2nd\'s reports');
+    _eq(night(new Date(2026, 9, 4, 2)), [marker], 'from the 4th the written rows stay');
 
     _section('بلا أسماء');
     const names = new Set(['حمزة علاء', 'محمد', 'محمد نبيل', 'أسماء علي']);
@@ -827,10 +843,10 @@ function _testDashboard() {
     _eq(back.former.map(s => s.name), ['غائب'], 'last year\'s students not seen this year are listed');
     _eq(back.former[0].birthYear, 2014, 'their birth year as a number');
     _eq([d.previousOpen, d.years], [false, ['2026']], 'mid-year: last year closed, one year');
-    const jan = buildDashboardData(Object.assign({ year: '2027' }, input, { today: new Date(2027, 0, 3) }));
-    _ok(jan.previousOpen, 'January 3: last year\'s December still open');
-    _ok(!buildDashboardData(Object.assign({ year: '2027' }, input, { today: new Date(2027, 0, 6) })).previousOpen,
-      'January 6: December frozen');
+    const jan = buildDashboardData(Object.assign({ year: '2027' }, input, { today: new Date(2027, 0, 2) }));
+    _ok(jan.previousOpen, 'January 2: last year\'s December still open');
+    _ok(!buildDashboardData(Object.assign({ year: '2027' }, input, { today: new Date(2027, 0, 3) })).previousOpen,
+      'January 3: December frozen');
     _eq(mn[0].recent, [{ day: '2026-10-03', session: 'صباحية', num: '1' }, { day: '2026-09-28', session: 'صباحية', num: '1' }],
       'last halaqat newest first, split for the report link');
     _eq([mn[0].months, d.activeDays], [{ '2026-10': 1, '2026-09': 1 }, 30], 'halaqat per month, and the active days');

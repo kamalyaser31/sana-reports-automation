@@ -97,7 +97,7 @@ function buildDashboardData(input) {
   return {
     year: input.year,
     years: input.years || [input.year],
-    // January 1–5: last year's December still takes edits, under last year.
+    // January 1–2: last year's December still takes edits, under last year.
     previousOpen,
     today: _isoDay(input.today),
     // The page lists students absent longer than this apart; the numbers keep them.

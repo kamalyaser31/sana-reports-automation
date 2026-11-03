@@ -19,12 +19,17 @@ const PUBLIC_STATS = {
   MONTHLY_TAB:  'شهرياً',
   ACADEMY:      'الأكاديمية',
   ACTIVE_DAYS:  30,
-  FREEZE_DAY:   5,
+  // The last day a month takes edits: it freezes on the 3rd of the next (Kamal, 2026-11-03).
+  FREEZE_DAY:   2,
   CHILDREN:     'أطفال',
   ADULTS:       'كبار',
   CURRENCY:     'EGP',
   // Pay, fixed expenses and the month's expense start here (S-50, S-51).
   PAY_FROM:     '2026-10',
+  // The registry holds all of October 2026 (Kamal, 2026-11-03), so a month before
+  // this has no student count, and this one no previous month for its new
+  // students and retention.
+  STUDENTS_FROM: '2026-10',
   // «الهدايا والتكريمات» left this list: the honors' own cost took its place (S-60).
   FIXED_ITEMS:  ['إدارة الأكاديمية'],
   // A month listed here counts only these teachers' halaqat: the other
@@ -73,7 +78,7 @@ function _previousMonth(month) {
 }
 
 /**
- * A month is frozen once the 5th of the following month has passed (S-20).
+ * A month is frozen from the day after FREEZE_DAY of the following month (S-20).
  * @param {string} month - "yyyy-mm".
  * @param {Date} today
  * @returns {boolean}
@@ -265,6 +270,7 @@ function computeTeacherPay(sheetReports, rates) {
  * @param {Date} input.today
  * @param {Object<string, Array<Array>>} [input.frozenMonthly] - Existing «شهرياً» rows by month.
  * @param {Array<Object>} [input.previous] - Last year's students, from previousYearStudents.
+ * @param {string} [input.studentsFrom] - As PUBLIC_STATS.STUDENTS_FROM, which it defaults to.
  * @returns {{ totals: Array<Array>, monthly: Array<Array>, pay: Array<Object> }}
  *   pay names teachers, so it is for the dashboard only.
  */
@@ -361,8 +367,12 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
   const frozen = input.frozenMonthly || {};
   const rows = [];
 
+  // The nightly run on the 3rd still writes last month, so the reports of the 2nd count.
+  const asOf = new Date(input.today.getTime() - 24 * 60 * 60 * 1000);
+  const thisMonth = _monthOf(input.today);
+  const studentsFrom = input.studentsFrom === undefined ? PUBLIC_STATS.STUDENTS_FROM : input.studentsFrom;
   months.forEach((month, i) => {
-    if (isMonthFrozen(month, input.today) && frozen[month] && frozen[month].length) {
+    if (isMonthFrozen(month, asOf) && frozen[month] && frozen[month].length) {
       frozen[month].forEach(r => rows.push(r));
       return;
     }
@@ -372,6 +382,8 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
     const hasPrevious = months.indexOf(_previousMonth(month)) !== -1;
     // decemberRefs: last year's December students in this list's scope (a teacher, or the academy).
     const studentPart = (list, decemberRefs) => {
+      if (month < studentsFrom) return { attended: 0, cols: ['', '', '', ''] };
+      const firstCounted = month === studentsFrom;
       const inMonth = s => s.days.some(d => d.substring(0, 7) === month);
       const december = new Set(decemberRefs);
       const inPrev = fromLastYear
@@ -380,15 +392,16 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
       const attended = list.filter(inMonth).length;
       const prev = fromLastYear ? decemberRefs.length : list.filter(inPrev).length;
       const stayed = list.filter(s => inMonth(s) && inPrev(s)).length;
-      const known = fromLastYear ? prev > 0 : hasPrevious;
+      const prevKnown = !firstCounted && (fromLastYear ? prev > 0 : hasPrevious);
       return {
         attended,
         cols: [
           // New: first seen this month, and not a student of last year either.
-          list.filter(s => s.days.length && s.days[0].substring(0, 7) === month && !lastYear.before.has(s.ref)).length,
+          firstCounted ? ''
+            : list.filter(s => s.days.length && s.days[0].substring(0, 7) === month && !lastYear.before.has(s.ref)).length,
           attended,
-          known ? stayed : '',
-          known && prev ? _round(stayed / prev, 3) : '',
+          prevKnown ? stayed : '',
+          prevKnown && prev ? _round(stayed / prev, 3) : '',
         ],
       };
     };
@@ -412,7 +425,9 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
     const monthPay = pay.filter(p => p.month === month);
     // Honors without an amount set would understate the cost too (S-60).
     const honorAmount = monthHonors.length ? honorAmountFor(month, honorAmounts) : 0;
-    const total = month < PUBLIC_STATS.PAY_FROM || monthPay.some(p => p.pay === '') || honorAmount === '' ? ''
+    // The month in progress has no expense yet: its fixed costs are whole and its pay is not (2026-11-03).
+    const total = month < PUBLIC_STATS.PAY_FROM || month >= thisMonth
+      || monthPay.some(p => p.pay === '') || honorAmount === '' ? ''
       : monthPay.reduce((a, p) => a + p.pay, 0) + fixedTotal + (expenses[month] ? expenses[month].amount : 0)
         + monthHonors.length * honorAmount;
     // Over the teaching hours this row shows, so a donor can check it; the pay
@@ -423,7 +438,7 @@ function _monthlyRows(teachers, academyStudents, teacherStudents, halaqat, expen
       total,
       total === '' ? '' : PUBLIC_STATS.CURRENCY,
       total !== '' && hours ? _round(total / hours) : '',
-      // Over the students the registry has counted, even in its first, partial month (Kamal, 2026-11-01).
+      // Over the students the registry has counted (Kamal, 2026-11-01).
       total !== '' && sp.attended ? _round(total / sp.attended) : '',
       monthHonors.length,
     ]));
@@ -452,9 +467,10 @@ function assertNoNames(rows, forbidden) {
  * Rebuilds the public file of a year from its registry.
  * @param {string} [year] - Defaults to the current year.
  * @param {Date} [today]
+ * @param {boolean} [recountFrozen] - Writes the frozen months anew too.
  * @returns {boolean} false when the year has no registry yet.
  */
-function refreshPublicStats(year, today) {
+function refreshPublicStats(year, today, recountFrozen) {
   const y = String(year || new Date().getFullYear());
   const now = today || new Date();
   const registry = _findRegistry(y);
@@ -466,7 +482,7 @@ function refreshPublicStats(year, today) {
   const teachers = academyTeachers(registry, sheetReports);
   const monthlyTab = ss.getSheetByName(PUBLIC_STATS.MONTHLY_TAB);
   const frozenMonthly = {};
-  _readBody(monthlyTab).forEach(r => {
+  if (!recountFrozen) _readBody(monthlyTab).forEach(r => {
     const m = String(r[0]);
     (frozenMonthly[m] = frozenMonthly[m] || []).push(r);
   });
@@ -682,7 +698,7 @@ function _openReportRow(ref, year, today) {
   const month = String(ref.month || '');
   if (!/^\d{4}-\d{2}$/.test(month) || month.slice(0, 4) !== year) throw new Error('شهر التقرير غير معروف.');
   if (isMonthFrozen(month, today)) {
-    throw new Error(`شهر ${month} ثابت بعد الخامس من الشهر التالي، فلا يُعدَّل تقريره ولا يُحذف.`);
+    throw new Error(`شهر ${month} ثابت منذ الثالث من الشهر التالي، فلا يُعدَّل تقريره ولا يُحذف.`);
   }
   const file = _teacherSheetFiles(year).find(f => f.teacher === ref.teacher);
   if (!file) throw new Error('لم يوجد شيت هذا المعلم.');
@@ -878,6 +894,14 @@ function readExpenseMonths(rows) {
 }
 
 /**
+ * Run once from the editor after a change to how months are counted: writes
+ * the frozen months of this year's public file anew (2026-11-03).
+ */
+function recountPublicStats() {
+  console.log(refreshPublicStats(String(new Date().getFullYear()), new Date(), true));
+}
+
+/**
  * Nightly job (S-21): the public file, then yesterday's
  * missed form responses. In the first days of January the previous year is
  * refreshed too, until its December freezes.
@@ -886,7 +910,8 @@ function readExpenseMonths(rows) {
 function nightlyStatsJob(today) {
   const now = today instanceof Date ? today : new Date();
   const years = [String(now.getFullYear())];
-  if (now.getMonth() === 0 && now.getDate() <= PUBLIC_STATS.FREEZE_DAY) years.push(String(now.getFullYear() - 1));
+  // Until the run after the freeze day, which writes December's last numbers.
+  if (now.getMonth() === 0 && now.getDate() <= PUBLIC_STATS.FREEZE_DAY + 1) years.push(String(now.getFullYear() - 1));
   years.forEach(y => {
     try { refreshPublicStats(y, now); }
     catch (error) { _safeLogToDrive('NIGHTLY', now, `refreshPublicStats ${y} failed: ${error.message}`, error.stack); }
